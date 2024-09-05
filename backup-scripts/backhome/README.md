@@ -2,7 +2,7 @@
 
 ### Description
 
-['backhome'](backup-scripts/backhome/backhome.sh) is a simple script that backs up files and directories to a specified location on an external drive using rsync.
+[`backhome`](backhome.sh) is a simple script that backs up files and directories to a specified location on an external drive using rsync.
 
 It is intended to be run manually, but can be automated using a cron job or other automation tool.
 
@@ -13,8 +13,7 @@ backhome.sh
 
 ### Requirements
 
-**rsync**:
-The script uses rsync to copy files and directories to the backup location. rsync is pre-installed on many sytems, but can be installed if necessary.
+The script uses `rsync` to copy files and directories to the backup location. rsync is pre-installed on many sytems, but can be installed if necessary.
 
 To verify if you have rsync installed, run:
 ```sh
@@ -23,7 +22,7 @@ rsync --version
 
 ### Installation
 
-Install the script to a directory in your PATH. For example, to install to '/usr/local/bin':
+Install the script to a directory in your PATH. For example, to install to `/usr/local/bin`:
 ```sh
 mkdir -p ~/.local/bin
 curl https://github.com/KennedyIDK/bash-scripts/backup-scripts/backhome/backhome.sh -o ~/.local/bin/backhome.sh
@@ -56,11 +55,11 @@ The script is intended to be run with an exclude file that contains a list of fi
 
 If you run the script without an exclude file, it will prompt you to confirm that you want to run the backup without excluding any files.
 
-To create a basic exclude file that omits '.cache' from the backup, run:
+To create a basic exclude file that omits `.cache` from the backup, run:
 ```sh
 mkdir -p ~/.config/rsync
 touch ~/.config/rsync/backhome-exclude.txt
-echo ".cache" >> ~/.config/rsync/backhome-exclude.txt
+echo ".cache/" >> ~/.config/rsync/backhome-exclude.txt
 ```
 
 Then set the `exclude_file` variable in the script to point to the exclude file:
@@ -69,6 +68,3 @@ exclude_file="$HOME/.config/rsync/backhome-exclude.txt" # Exclude file path.
 ```
 
 To add more files and directories to the exclude file, add the path to the file on a separate line. You might want to exclude directories that contain large amounts of easily replaceable data, like game libraries.
-
-### License
-This project is licensed under the MIT License - see the [LICENSE](LICENSE.md) file for details.
