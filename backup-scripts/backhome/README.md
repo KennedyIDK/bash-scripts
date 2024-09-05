@@ -1,7 +1,5 @@
 # 🏡 Backhome
 
-### Description
-
 [`backhome`](backhome.sh) is a simple script that backs up files and directories to a specified location on an external drive using rsync.
 
 It is intended to be run manually, but can be automated using a cron job or other automation tool.
