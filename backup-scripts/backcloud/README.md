@@ -1,7 +1,5 @@
 # ☔ Backcloud
 
-### Description
-
 > "Be careful of the storm; it can wash away the things you thought were permanent." — Unknown quote from the internet.
 
 [`backcloud`](backcloud.sh) is a Bash script designed to automate the backup of files to cloud storage using [rclone](https://rclone.org/). 
