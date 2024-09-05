@@ -44,7 +44,4 @@ You can customise the timestamp format and location directory by editing the var
 
 The default timestamp format is `%Y-%m-%d_(%H:%M)` - `:%S` will be included if required to resolve a clash (i.e you back up the same source twice in the same minute).
 
-The default location directory for moving backups is `$HOME/backups`. The location directory will be created if it does not exist and you elect to move a backup. 
-
-### License
-This project is licensed under the MIT License - see the [LICENSE](LICENSE.md) file for details.
+The default location directory for moving backups is `$HOME/backups`. The location directory will be created if it does not exist and you elect to move a backup.
