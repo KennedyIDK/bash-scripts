@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 
-# NAME        : backloud
+# NAME        : backcloud
 
 # DESCRIPTION : Backup files to cloud storage using rclone.
 
