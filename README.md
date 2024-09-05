@@ -15,7 +15,7 @@ Iain
 ### [bak](backup-scripts/bak)
 Creates a timestamped copy of a file or directory and gives you the option to move it to a specified directory.
 
-### [backloud](backup-scripts/backloud)
+### [backcloud](backup-scripts/backcloud)
 Backs up specified directories to cloud storage using rclone.
 
 ### [backhome](backup-scripts/backhome)
