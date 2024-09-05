@@ -1,22 +1,23 @@
-# ☔ Backloud
+# ☔ Backcloud
 
 ### Description
 
 > "Be careful of the storm; it can wash away the things you thought were permanent." — Unknown quote from the internet.
 
-[`backloud`](backloud.sh) is a Bash script designed to automate the backup of files to cloud storage using [rclone](https://rclone.org/). 
+[`backcloud`](backcloud.sh) is a Bash script designed to automate the backup of files to cloud storage using [rclone](https://rclone.org/). 
 
 It provides a simple way to sync important files and directories to a cloud storage remote, including encrypted backups for sensitive data.
 
 ### Usage
 ```sh
-backloud.sh
+backcloud.sh
 ```
 
 ### Requirements
 
-- **rclone**: Ensure that [rclone](https://rclone.org/downloads/) is installed on your system.
-- **rclone Configuration**: You must have a valid rclone configuration located at `~/.config/rclone/rclone.conf`. 
+#### rclone
+- Ensure that [rclone](https://rclone.org/downloads/) is installed on your system.
+- You must have a valid rclone configuration located at `~/.config/rclone/rclone.conf`.
 
 If you have never used rclone before, follow the [rclone configuration guide](https://rclone.org/docs/#configuration) to set it up. 
 
