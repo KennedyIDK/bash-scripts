@@ -12,11 +12,7 @@ It displays the following information:
 - Recent backups
 - Warning if backups are out of date
 
----
-
 ![](header-screenshot.png)
-
----
 
 This script assumes that the backup logs are stored in the log_dir directory, with the following structure:
 - rsync/local/: local backup logs
