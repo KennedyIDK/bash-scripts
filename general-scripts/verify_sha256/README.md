@@ -7,13 +7,10 @@
 ```bash
 verify_sha256 <file> <hash>
 ```
----
 
 ![](verify-screenshot01.png)
 
 ![](verify-screenshot02.png)
-
----
 
 ### Installation
 
@@ -33,6 +30,6 @@ Remove the .sh extension (optional):
 mv ~/.local/bin/verify_sha256.sh ~/.local/bin/verify_sha256
 ```
 
---
+---
 
 Also available as a custom action in [Thunar]().
