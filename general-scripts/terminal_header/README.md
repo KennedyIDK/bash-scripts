@@ -14,14 +14,16 @@ It displays the following information:
 
 ![](header-screenshot.png)
 
-This script assumes that the backup logs are stored in the log_dir directory, with the following structure:
-local backup logs: rsync/local/
-cloud backup logs: rclone/
-other backup logs: rsync/other/
+This script assumes that the backup logs are stored in the log_dir directory, with the following structure: \
+- local backup logs: rsync/local/ \
+- cloud backup logs: rclone/ \
+- other backup logs: rsync/other/
 
 With the following naming convention: `rclone/rsync_YYYY-MM-DD_(HH:MM).log`
 
 The [backup scripts](https://github.com/KennedyIDK/bash-scripts/tree/main/backup-scripts) in this repository generate logs that follow this naming convention.
+
+---
 
 ### Installation
 
