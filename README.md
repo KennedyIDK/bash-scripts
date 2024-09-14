@@ -34,7 +34,7 @@ Resizes images to common wallpaper resolutions based on the aspect ratio. Used i
 
 ## Obsidian Scripts
 
-#### [obs_sorspace](obsidian-scripts/obs_sorspace)
+#### [obs_sortspace](obsidian-scripts/obs_sortspace)
 Appends text you have selected to the end of a note in Obsdian, preceeded by a blank line. Hotkey.
 
 #### [obs_todo](obsidian-scripts/obs_todo)
