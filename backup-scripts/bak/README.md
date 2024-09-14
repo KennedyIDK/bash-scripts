@@ -25,7 +25,7 @@ Replace `<file or dir>` with the path to the file or directory you wish to backu
 Install the script to a directory in your PATH. For example, to install to `/usr/local/bin`:
 ```sh
 mkdir -p ~/.local/bin
-curl https://github.com/KennedyIDK/bash-scripts/backup-scripts/bak/bak.sh -o ~/.local/bin/bak.sh
+curl https://raw.githubusercontent.com/KennedyIDK/bash-scripts/main/backup-scripts/bak/bak.sh -o ~/.local/bin/bak.sh
 ```
 
 Make the script executable:

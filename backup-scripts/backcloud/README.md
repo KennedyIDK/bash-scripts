@@ -28,7 +28,7 @@ If you would rather encrypt all of your data, or if you don't have any sensitive
 Install the script to a directory in your PATH. For example, to install to `/usr/local/bin`:
 ```sh
 mkdir -p ~/.local/bin
-curl https://github.com/KennedyIDK/bash-scripts/backup-scripts/backcloud/backloud.sh -o ~/.local/bin/backcloud.sh
+curl https://raw.githubusercontent.com/KennedyIDK/bash-scripts/main/backup-scripts/backcloud/backloud.sh -o ~/.local/bin/backcloud.sh
 ```
 
 Make the script executable:

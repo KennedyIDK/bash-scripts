@@ -1,6 +1,6 @@
 # Walsh
 
-`walsh.sh` is a script for quickly resizing images to common wallpaper resolutions based on the aspect ratio. 
+`walsh.sh` (wallpaper .sh) is a script for quickly resizing images to common wallpaper resolutions based on the aspect ratio. I used this script to automate the resizing of images for [Kenya Wallpapers](https://github.com/KennedyIDK/kenya-wallpapers).
 
 ---
 
@@ -54,7 +54,7 @@ The script organizes images into the following directory structure under ~/custo
 Install the script to a directory in your PATH. For example, to install to `/usr/local/bin`:
 ```sh
 mkdir -p ~/.local/bin
-curl https://github.com/KennedyIDK/bash-scripts/general-scripts/walsh/walsh.sh -o ~/.local/bin/verify_sha256.sh
+curl https://raw.githubusercontent.com/KennedyIDK/bash-scripts/main/general-scripts/walsh/walsh.sh -o ~/.local/bin/walsh.sh
 ```
 
 Make the script executable:

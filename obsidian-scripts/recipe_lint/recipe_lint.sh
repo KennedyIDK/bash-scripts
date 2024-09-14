@@ -11,7 +11,7 @@
 
 # Directory containing the recipes.
 
-recipe_dir="$HOME/appdata/obsidian/recipe-vault/nyt-recipes"
+recipe_dir="$HOME/recipe-vault/nyt-recipes"
 
 # Strings to remove from the recipe filenames.
 
@@ -115,14 +115,6 @@ echo "Syncing recipes..."
 echo
 echo "      Syncing to Obsidian..."
 sync_recipes "$HOME/obsidian/kitchen"
-
-echo
-echo "      Syncing with Travis..."
-sync_recipes "$HOME/sharing/travis"
-
-echo
-echo "      Syncing with Celina..."
-sync_recipes "$HOME/sharing/celina"
 
 # SCRIPT_CLOSE
 # ------------

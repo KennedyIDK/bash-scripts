@@ -11,6 +11,15 @@
 
 sortspace_file="$HOME/obsidian/_sortspace.md"
 
+# CHECKS
+# ------
+
+# Check for wl-paste or xclip.
+if ! command -v wl-paste &>/dev/null && ! command -v xclip &>/dev/null; then
+  echo "Error: wl-paste or xclip is required but not installed. Aborting." >&2
+  exit 1
+fi
+
 # SCRIPT_EXECUTION
 # ----------------
 

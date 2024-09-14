@@ -8,9 +8,7 @@
 verify_sha256 <file> <hash>
 ```
 
-![](verify-screenshot01.png)
-
-![](verify-screenshot02.png)
+![](verify-screenshot.png)
 
 ### Installation
 

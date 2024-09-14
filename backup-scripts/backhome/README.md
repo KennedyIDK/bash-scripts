@@ -23,7 +23,7 @@ rsync --version
 Install the script to a directory in your PATH. For example, to install to `/usr/local/bin`:
 ```sh
 mkdir -p ~/.local/bin
-curl https://github.com/KennedyIDK/bash-scripts/backup-scripts/backhome/backhome.sh -o ~/.local/bin/backhome.sh
+curl https://raw.githubusercontent.com/KennedyIDK/bash-scripts/main/backup-scripts/backhome/backhome.sh -o ~/.local/bin/backhome.sh
 ```
 
 Make the script executable:

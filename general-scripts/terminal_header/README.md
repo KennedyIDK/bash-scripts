@@ -18,3 +18,6 @@ This script assumes that the backup logs are stored in the log_dir directory, wi
 - rsync/local/: local backup logs
 - rclone/: cloud backup logs
 - rsync/other/: other backup logs
+
+### Installation
+
