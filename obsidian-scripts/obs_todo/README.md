@@ -4,15 +4,11 @@ This script is intended to be used with the [Obsidian](https://obsidian.md/) not
 
 It uses zenity to open a text input dialog, allowing you to quickly add a todo item to a note in Obsidian at a specific location (the top of your todo list, for example).
 
-It is intended to bound to a hotkey.
+It is intended to be bound to a hotkey.
 
 ## Prerequisites
 
-Before using this script, ensure you have zenity installed.
-
-## Notes
-
-On wayland, `wl-paste` is used to get the clipboard contents - you will need to copy the selected contents to the system clipboard yourself. On X11 it's a single hotkey press to copy the selected text to the clipboard and append it to the note.
+Before using this script, ensure you have `zenity` installed.
 
 ## Configuration
 
@@ -37,5 +33,7 @@ Remove the .sh extension (optional):
 ```sh
 mv ~/.local/bin/obs_todo.sh ~/.local/bin/obs_todo
 ```
+
+---
 
 Lastly, bind the script to a hotkey of your choice in your window manager or desktop environment settings.

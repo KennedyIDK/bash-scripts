@@ -4,7 +4,7 @@ This script is intended to be used with the [Obsidian](https://obsidian.md/) not
 
 All it does is append text you have selected to the end of a note in Obsdian, preceeded by a blank line. I find it useful for quickly adding to Obsidian without having to switch windows. 
 
-It is intended to bound to a system hotkey.
+It is intended to be bound to a system hotkey.
 
 ## Prerequisites
 
@@ -39,5 +39,7 @@ Remove the .sh extension (optional):
 ```sh
 mv ~/.local/bin/obs_sortspace.sh ~/.local/bin/obs_sortspace
 ```
+
+---
 
 Lastly, bind the script to a hotkey of your choice in your window manager or desktop environment settings.

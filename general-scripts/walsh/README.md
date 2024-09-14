@@ -31,22 +31,22 @@ The script will check the image aspect ratio and resize it to the following reso
 
 The script organizes images into the following directory structure under ~/custom/wallpapers (default location):
 
-~/custom/wallpapers/
-├── 16x9/
-│   ├── 1920x1080/
-│   ├── 2560x1440/
-│   ├── ...
-├── 16x10/
-│   ├── 1920x1200/
-│   ├── ...
-├── 21x9/
-│   ├── 2560x1080/
-│   ├── ...
-├── 9x16/
-│   ├── 1080x1920/
-│   ├── ...
-├── Tablets/
-├── Smartphones/
+~/custom/wallpapers/ \
+├── 16x9/ \
+│   ├── 1920x1080/ \
+│   ├── 2560x1440/ \
+│   ├── ... \
+├── 16x10/ \
+│   ├── 1920x1200/ \
+│   ├── ... \
+├── 21x9/ \
+│   ├── 2560x1080/ \
+│   ├── ... \
+├── 9x16/ \
+│   ├── 1080x1920/ \
+│   ├── ... \
+├── Tablets/ \
+├── Smartphones/ \
 └── Other/
 
 ### Installation

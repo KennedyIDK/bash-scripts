@@ -5,10 +5,11 @@
 ### Usage
 
 ```bash
-verify_sha256 <file> <hash>
+verify_sha256.sh <file> <hash>
 ```
 
 ![](verify-screenshot.png)
+* I have removed the .sh extension for ease of use.
 
 ### Installation
 
