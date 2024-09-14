@@ -8,8 +8,8 @@
 verify_sha256.sh <file> <hash>
 ```
 
-![](verify-screenshot.png)
-* I have removed the .sh extension for ease of use.
+![](verify-screenshot.png) \
+Note: I have removed the .sh extension for ease of use.
 
 ### Installation
 
@@ -31,4 +31,4 @@ mv ~/.local/bin/verify_sha256.sh ~/.local/bin/verify_sha256
 
 ---
 
-Also available as a custom action in [Thunar]().
+Also available as a custom action in [Thunar](https://github.com/KennedyIDK/bash-scripts/tree/main/thunar-scripts/thunar_verify256).
