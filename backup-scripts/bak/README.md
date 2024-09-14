@@ -4,7 +4,8 @@
 
 [`bak`](bak.sh) is a simple Bash script to create a timestamped copy of a file or directory. It will also prompt you to move the backup to a specified location directory. 
 
-![](bak_example.gif)
+![](bak_example.gif) \
+Note: I have removed the .sh extension for ease of use.
 
 The script is designed for creating quick one-off copies and is not suitable for large-scale or automated backups.
 
