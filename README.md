@@ -30,5 +30,5 @@ Displays a header in the terminal with info on uptime, VPN status, and recent ba
 Verifies the SHA256 checksum of a file.
 
 ### [walsh](general-scripts/walsh)
-For wallpaper sh. Resizes images to common wallpaper resolutions based on the aspect ratio. Used in [Kenya Wallpapers](https://github.com/KennedyIDK/kenya-wallpapers).
+Resizes images to common wallpaper resolutions based on the aspect ratio. Used in [Kenya Wallpapers](https://github.com/KennedyIDK/kenya-wallpapers).
 
