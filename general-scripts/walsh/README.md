@@ -7,7 +7,7 @@
 ### Usage
 
 ```bash
-walsh <image>
+walsh.sh <image>
 ```
 
 The script will check the image aspect ratio and resize it to the following resolutions automatically:
