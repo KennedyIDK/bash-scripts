@@ -17,7 +17,7 @@ verify_sha256 <file> <hash>
 Install the script to a directory in your PATH. For example, to install to `/usr/local/bin`:
 ```sh
 mkdir -p ~/.local/bin
-curl https://github.com/KennedyIDK/bash-scripts/general-scripts/verify_sha256/verify_sha256.sh -o ~/.local/bin/verify_sha256.sh
+curl https://raw.githubusercontent.com/KennedyIDK/bash-scripts/main/general-scripts/verify_sha256/verify_sha256.sh -o ~/.local/bin/verify_sha256.sh
 ```
 
 Make the script executable:
