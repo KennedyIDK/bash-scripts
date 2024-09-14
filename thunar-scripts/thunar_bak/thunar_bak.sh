@@ -15,23 +15,6 @@ backup_file="$(basename "$1")_$(date +'%Y-%m-%d_(%H:%M)').bak"
 backup_dirsecs="$(basename "$1")_$(date +'%Y-%m-%d_(%H:%M:%S)').bak"
 backup_filesecs="$(basename "$1")_$(date +'%Y-%m-%d_(%H:%M:%S)').bak"
 
-# CHECKS
-# ------
-
-# Check if a filename or directory was provided as an argument.
-
-if [ $# -eq 0 ]; then
-  zenity --error --text="No file or directory selected."
-  exit 1
-fi
-
-# Check if the provided path exists.
-
-if [ ! -e "$1" ]; then
-  zenity --error --text="The selected file or directory does not exist."
-  exit 1
-fi
-
 # SCRIPT_EXECUTION
 # ----------------
 
