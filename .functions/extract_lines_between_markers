@@ -1,0 +1,23 @@
+#!/usr/bin/env bash
+
+#######################################
+# Extract lines between markers from a file
+#
+# ARGUMENTS:
+#   $1 - The file to extract lines from
+#   $2 - The opening marker
+#   $3 - The closing marker
+#######################################
+extract_lines_between_markers() {
+	local file="${1}"
+	local opening_marker="${2}"
+	local closing_marker="${3}"
+	local extract_lines_between_markers=""
+	while IFS=$'\n' read -r line; do
+		[[ ${extract_lines_between_markers} && ${line} != "${closing_marker}" ]] &&
+			printf '%s\n' "${line}"
+
+		[[ ${line} == "${opening_marker}" ]] && extract_lines_between_markers=1
+		[[ ${line} == "${closing_marker}" ]] && extract_lines_between_markers=
+	done <"${file}"
+}

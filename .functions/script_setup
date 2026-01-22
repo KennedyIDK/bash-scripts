@@ -1,0 +1,52 @@
+#!/usr/bin/env bash
+
+#######################################
+# Main script setup function
+#
+# SETS:
+#   _ERROR_COUNTER
+#   _SCRIPT_NAME
+#   _SCRIPT_DIR
+#   _SCRIPT_PATH
+#   _LOG_DIR
+#   _LOG_FILE
+#   _INTERACTIVE
+#
+# EXITS:
+#   103 - Failed to create log directory or log file
+#   104 - Failed to check required commands
+#   127 - Missing required commands
+#######################################
+script_setup() {
+  _ERROR_COUNTER=0
+
+  local timestamp
+  timestamp="$(date +'%Y%m%d%H%M%S')"
+
+  _SCRIPT_NAME="${0##*/}"
+  readonly _SCRIPT_NAME
+  _SCRIPT_DIR="${0%/*}"
+  [[ "${_SCRIPT_DIR}" == "${_SCRIPT_NAME}" ]] && _SCRIPT_DIR="."
+  readonly _SCRIPT_DIR
+  _SCRIPT_PATH="$(realpath "$0")"
+  readonly _SCRIPT_PATH
+
+  readonly _LOG_DIR="${SCRIPT_LOGS:-${_SCRIPT_DIR}/.logs}"
+  readonly _LOG_FILE="${_LOG_DIR}/${_SCRIPT_NAME}.log"
+  if ! { mkdir -p "${_LOG_DIR}" && touch "${_LOG_FILE}"; }; then
+    printf "%s\n" "ERROR/${_SCRIPT_NAME} ${timestamp}: Script failed with exit code 103 (Failed to create log file)" >&2
+    exit 103
+  fi
+
+  if [ -t 0 ] && [ -t 1 ] && tty -s; then
+    readonly _INTERACTIVE=true
+  else
+    readonly _INTERACTIVE=false
+  fi
+
+  if ! check_required_commands; then
+    printf "%s\n" "ERROR/${_SCRIPT_NAME} ${timestamp}: Script failed with exit code 104 (Failed to check required commands)" | tee -a "${_LOG_FILE}" >&2
+    exit 104
+  fi
+}
+

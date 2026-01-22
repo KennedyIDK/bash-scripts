@@ -1,0 +1,25 @@
+#!/usr/bin/env bash
+
+#######################################
+# Create a thumbnail from an image
+#
+# ARGUMENTS:
+#   $1 - Image file
+#   $2 - Thumbnail width in pixels (optional, default: 600)
+#######################################
+create_image_thumbnail_for() {
+	local image="$1"
+	local thumbnail_width="${2:-600}"
+	local file_extension="${image##*.}"
+	local thumbnail_file
+	thumbnail_file="$(mktemp --suffix=".${file_extension}")"
+
+	# Create resized thumbnail
+	if magick "${image}" -resize "${thumbnail_width}x" "${thumbnail_file}"; then
+		# Display the thumbnail
+		kitty +kitten icat --align left "${thumbnail_file}" 2>/dev/null || true
+		rm -f "${thumbnail_file}"
+	else
+		err "Failed to create thumbnail for ${image}"
+	fi
+}

@@ -1,0 +1,126 @@
+#!/usr/bin/env bash
+
+# Apply ANSI escape codes to string
+#
+# ARGUMENTS:
+#   $1 - The string to apply ANSI escape codes to
+#   $2 - The colour of the text (red, green, bright_red, bright_green, etc)
+#   $3 - The colour of the background (bg_red, bg_green, bg_bright_red, etc)
+#   $4 - The style(s) of the text - comma-separated for multiple (bold,underline)
+#
+# EXAMPLE:
+#   ansify_string "Hello, world!" "red"
+#   ansify_string "Warning!" "bright_yellow" "" "bold,underline"
+
+ansify_string() {
+	local string="${1}"
+	local text_colour="${2}"
+	local background_colour="${3:-}"
+	local style="${4:-}"
+	local text_code
+	local bg_code
+	local ansi_code
+	local style_codes=""
+
+	case "${text_colour:-default}" in
+	*black)
+		text_code="30"
+		;;
+	*red)
+		text_code="31"
+		;;
+	*green)
+		text_code="32"
+		;;
+	*yellow)
+		text_code="33"
+		;;
+	*blue)
+		text_code="34"
+		;;
+	*purple)
+		text_code="35"
+		;;
+	*cyan)
+		text_code="36"
+		;;
+	*white)
+		text_code="37"
+		;;
+	*)
+		text_code="39"
+		;;
+	esac
+
+	if [[ "${text_colour}" == *bright* && ${text_code} -ge 30 && ${text_code} -le 37 ]]; then
+		text_code=$((text_code + 60))
+	fi
+
+	case "${background_colour:-default}" in
+	*black)
+		bg_code="40"
+		;;
+	*red)
+		bg_code="41"
+		;;
+	*green)
+		bg_code="42"
+		;;
+	*yellow)
+		bg_code="43"
+		;;
+	*blue)
+		bg_code="44"
+		;;
+	*purple)
+		bg_code="45"
+		;;
+	*cyan)
+		bg_code="46"
+		;;
+	*white)
+		bg_code="47"
+		;;
+	*)
+		bg_code="49"
+		;;
+	esac
+
+	if [[ "${background_colour}" == *bright* && ${bg_code} -ge 40 && ${bg_code} -le 47 ]]; then
+		bg_code=$((bg_code + 60))
+	fi
+
+	# Process styles (comma-separated for multiple)
+	local IFS=','
+	for s in ${style:-}; do
+		case "${s}" in
+		bold)
+			style_codes="${style_codes}1;"
+			;;
+		intense)
+			if [[ ${text_code} -ge 30 && ${text_code} -le 37 ]]; then
+				text_code=$((text_code + 60))
+			fi
+			if [[ ${bg_code} -ge 40 && ${bg_code} -le 47 ]]; then
+				bg_code=$((bg_code + 60))
+			fi
+			;;
+		italic)
+			style_codes="${style_codes}3;"
+			;;
+		underline)
+			style_codes="${style_codes}4;"
+			;;
+		strikethrough)
+			style_codes="${style_codes}9;"
+			;;
+		blinking)
+			style_codes="${style_codes}5;"
+			;;
+		esac
+	done
+
+	ansi_code="\033[${style_codes}${text_code};${bg_code}m"
+
+	printf "%b" "${ansi_code}${string}\033[0m"
+}

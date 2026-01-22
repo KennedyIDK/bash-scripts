@@ -1,0 +1,16 @@
+#!/usr/bin/env bash
+
+#######################################
+# Trim leading and trailing whitespace from a string
+#
+# ARGUMENTS:
+#   $1 - The string to trim
+#######################################
+trim_lead_trail_whitespace() {
+  local string="${1}"
+  string="${string#"${string%%[![:space:]]*}"}"
+  string="${string%"${string##*[![:space:]]}"}"
+  printf '%s\n' "${string}"
+}
+
+

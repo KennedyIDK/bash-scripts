@@ -1,0 +1,24 @@
+#!/usr/bin/env bash
+
+# Check for missing commands
+#
+# ARGUMENTS:
+#   $_REQUIRED_COMMANDS - Array of required commands
+#
+# EXITS:
+#   127 - Missing required commands
+
+check_required_commands() {
+	local missing_commands=()
+
+	for cmd in "${_REQUIRED_COMMANDS[@]}"; do
+		if ! command -v "${cmd}" >/dev/null 2>&1; then
+			missing_commands+=("${cmd}")
+		fi
+	done
+
+	if [[ "${#missing_commands[@]}" -gt 0 ]]; then
+		err "Missing commands: ${missing_commands[*]}"
+		exit 127
+	fi
+}

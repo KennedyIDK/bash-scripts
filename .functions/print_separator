@@ -1,0 +1,16 @@
+#!/usr/bin/env bash
+
+#######################################
+# Print a separator line
+#
+# ARGUMENTS:
+#   $1 - The character to use for the separator (default: #)
+#   $2 - The number of characters in the separator (default: terminal width or 80)
+#######################################
+print_separator() {
+	local character="${1:-#}"
+	local separator_length
+	separator_length="${2:-$(tput cols 2>/dev/null || echo 80)}"
+
+	printf "%${separator_length}s\n" | tr ' ' "${character}"
+}

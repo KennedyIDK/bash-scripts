@@ -1,0 +1,45 @@
+#!/usr/bin/env bash
+
+#######################################
+# Print exit code message to terminal/notification
+#
+# ARGUMENTS:
+#   $1 - The exit code of the script
+#######################################
+print_exit_code() {
+	local exit_code="${1}"
+	local exit_code_message=""
+
+	# Search for the exit code in the script comments first
+	exit_code_message=$(grep "^#[[:space:]]\+${exit_code}[[:space:]]-" "${_SCRIPT_PATH}" 2>/dev/null |
+		sed "s/.*${exit_code} - //" || true)
+
+	# If not found in script
+	if [[ -z "${exit_code_message}" ]]; then
+		case ${exit_code} in
+		0) exit_code_message="Success" ;;
+		1) exit_code_message="General error" ;;
+		2) exit_code_message="Built-in error" ;;
+		3) exit_code_message="Invalid argument" ;;
+		4) exit_code_message="Unknown option" ;;
+		7) exit_code_message="Permission denied" ;;
+		8) exit_code_message="Configuration error" ;;
+		126) exit_code_message="Command cannot execute" ;;
+		127) exit_code_message="Command not found" ;;
+		130) exit_code_message="Terminated by Ctrl-C" ;;
+		*) exit_code_message="Unknown error" ;;
+		esac
+	fi
+
+	if [[ "${exit_code}" -ne 0 ]]; then
+		err "Script failed with exit code ${exit_code} (${exit_code_message})"
+		[[ "${_INTERACTIVE}" = true ]] || notify-send "${_SCRIPT_NAME} failed: ${exit_code}"
+	else
+		if [[ "${_ERROR_COUNTER}" -gt 0 ]]; then
+			warn "Script completed with ${_ERROR_COUNTER} error(s)"
+			[[ "${_INTERACTIVE}" = true ]] || notify-send "${_SCRIPT_NAME}: ${_ERROR_COUNTER} error(s)"
+		else
+			deb "Script completed successfully"
+		fi
+	fi
+}

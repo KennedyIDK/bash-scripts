@@ -1,0 +1,18 @@
+#!/usr/bin/env bash
+
+#######################################
+# Reverse an array
+#
+# ARGUMENTS:
+#   $@ - The array elements to reverse
+#######################################
+reverse_array() {
+  local array=("$@")
+  local reversed=()
+  for ((i = ${#array[@]} - 1; i >= 0; i--)); do
+    reversed+=("${array[i]}")
+  done
+  printf '%s\n' "${reversed[@]}"
+}
+
+

@@ -1,0 +1,24 @@
+#!/usr/bin/env bash
+
+#######################################
+# Remove duplicates from an array
+#
+# ARGUMENTS:
+#   $@ - The array elements to remove duplicates from
+#######################################
+remove_duplicates_from_array() {
+  local array=("$@")
+  declare -A seen_items
+  local unique_items=()
+
+  for item in "${array[@]}"; do
+    if [[ -n "${item}" ]] && [[ -z "${seen_items[${item}]:-}" ]]; then
+      seen_items["${item}"]=1
+      unique_items+=("${item}")
+    fi
+  done
+
+  printf '%s\n' "${unique_items[@]}"
+}
+
+

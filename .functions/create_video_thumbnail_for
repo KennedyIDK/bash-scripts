@@ -1,0 +1,43 @@
+#!/usr/bin/env bash
+
+#######################################
+# Create a thumbnail strip from a video (start, middle, end frames)
+#
+# ARGUMENTS:
+#   $1 - Video file
+#   $2 - Frame width in pixels (optional, default: 300)
+#######################################
+create_video_thumbnail_for() {
+	local video="$1"
+	local frame_width="${2:-300}"
+	local output_dir
+	output_dir="$(dirname "${video}")"
+	local temp_dir
+	temp_dir=$(mktemp -d)
+
+	local duration
+	duration=$(ffmpeg -i "${video}" 2>&1 | grep "Duration" | awk '{print $2}' | tr -d ,) || true
+	local h m s total_seconds
+	IFS=: read -r h m s <<<"${duration}"
+	total_seconds=$(echo "${h} * 3600 + ${m} * 60 + ${s}" | bc)
+
+	local start_time=0
+	local middle_time
+	middle_time=$(echo "${total_seconds} / 2" | bc)
+	local end_time
+	end_time=$(echo "${total_seconds} - 0.5" | bc)
+
+	# Extract and resize images to temp directory
+	ffmpeg -y -ss "${start_time}" -i "${video}" -vframes 1 -update 1 -vf "scale=${frame_width}:-1" "${temp_dir}/start.png" 2>/dev/null
+	ffmpeg -y -ss "${middle_time}" -i "${video}" -vframes 1 -update 1 -vf "scale=${frame_width}:-1" "${temp_dir}/middle.png" 2>/dev/null
+	ffmpeg -y -ss "${end_time}" -i "${video}" -vframes 1 -update 1 -vf "scale=${frame_width}:-1" "${temp_dir}/end.png" 2>/dev/null
+
+	# Append the images into a single image
+	magick "${temp_dir}/start.png" "${temp_dir}/middle.png" "${temp_dir}/end.png" +append "${output_dir}/video_thumbnail.png"
+
+	# Display the thumbnail
+	kitty +kitten icat --align left "${output_dir}/video_thumbnail.png" 2>/dev/null || true
+
+	# Cleanup
+	rm -rf "${temp_dir}"
+}

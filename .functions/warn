@@ -1,0 +1,25 @@
+#!/usr/bin/env bash
+
+# This function is used to display warning messages.
+#
+# Warning messages are used to notify the user when correct functionality may not be expected. Like if a backup script is running in dry run mode.
+#
+# It should not be used for errors where the script is not functioning in an expected way.
+
+#######################################
+# Display warning message
+#
+# ARGUMENTS:
+#   $@ - The warning message
+#######################################
+warn() {
+	local message_type="WARNING"
+	local stylised_message_type
+	stylised_message_type=$'\033[4;36;49m'"${message_type}"$'\033[0m' # cyan underline
+
+	local timestamp
+	timestamp="$(date +'%Y%m%d%H%M%S')"
+
+	printf "%s\n" "${stylised_message_type}/${_SCRIPT_NAME}: $*" >&2
+	printf "%s\n" "${message_type}/${_SCRIPT_NAME} ${timestamp}: $*" >>"${_LOG_FILE}"
+}

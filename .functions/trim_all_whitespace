@@ -1,0 +1,17 @@
+#!/usr/bin/env bash
+
+#######################################
+# Trim all whitespace from a string
+#
+# ARGUMENTS:
+#   $@ - The string to trim
+#######################################
+# shellcheck disable=SC2086,SC2048
+trim_all_whitespace() {
+  set -f
+  set -- $*
+  printf '%s\n' "$*"
+  set +f
+}
+
+
