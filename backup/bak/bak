@@ -1,0 +1,369 @@
+#!/usr/bin/env bash
+
+# bak - Create timestamped backups of files or directories.
+#
+# This script creates timestamped copies of files or directories and optionally
+# moves them to a backup directory. Supports compression and interactive/non-
+# interactive modes.
+#
+# Usage:
+#   bak [OPTIONS] FILE...
+#
+# Options:
+#   -s       Store backups in the current directory
+#   -c       Compress backup using tar/gzip
+#   -h       Show help message
+
+# SETTINGS
+# =============================================================================
+
+readonly _DEBUG=false
+
+set -o errexit
+set -o nounset
+set -o pipefail
+
+# VARIABLES
+# =============================================================================
+
+_COMPRESS=false        # default is uncompressed
+_STAY_IN_PLACE=false   # change to keep all files in place
+_DEFAULT_OUTPUT_DIR="" # change to specify a default output directory
+
+_TIMESTAMP="$(date +'%Y%m%d%H%M%S')" # timestamp format for backup filename
+readonly _TIMESTAMP
+
+_INPUT_FILES=()       # array of input files, set by parse_arguments()
+_VALID_INPUT_FILES=() # array of validated input files, set by validate_input_files()
+
+# FUNCTIONS
+# =============================================================================
+
+main() {
+	setup_and_dependencies
+	parse_arguments "$@"
+
+	validate_input_files
+	local input_files=("${_VALID_INPUT_FILES[@]+"${_VALID_INPUT_FILES[@]}"}")
+	for input_file in "${input_files[@]}"; do
+		create_backup_of "${input_file}"
+	done
+}
+
+#######################################
+# Check required functions/dependencies and set global variables
+#
+# EXITS:
+#   101 - Failed to source required function
+#   102 - Failed to run script setup
+#   103 - Failed to create log directory or log file
+#   104 - Failed to check required commands
+#   127 - Missing required dependencies
+#######################################
+setup_and_dependencies() {
+	local core_functions=(
+		"script_setup"
+		"check_required_commands"
+		"print_exit_code"
+		"err"
+		"warn"
+		"deb"
+	)
+
+	local additional_functions=(
+		"remove_duplicates_from_array"
+	)
+
+	local external_commands=(
+		"tar"
+		"gzip"
+	)
+
+	local required_functions=("${core_functions[@]}" "${additional_functions[@]}")
+	readonly _REQUIRED_COMMANDS=("${required_functions[@]}" "${external_commands[@]}")
+
+	local timestamp
+	timestamp="$(date +'%Y%m%d%H%M%S')"
+	local error_message
+	error_message="ERROR/${0##*/} ${timestamp}: Script failed with exit code"
+
+	local functions_dir="${HOME}/bin/.functions"
+	for function in "${required_functions[@]}"; do
+		local function_file="${functions_dir}/${function}"
+		if [[ -s "${function_file}" ]]; then
+			# shellcheck source=/dev/null
+			source "${function_file}" || {
+				printf "%s\n" "${error_message} 101 (Failed to source function ${function})" >&2
+				exit 101
+			}
+		fi
+	done
+
+	script_setup || exit 102
+}
+
+#######################################
+# Parse command line arguments
+#
+# EXITS:
+#   0 - Help requested
+#   4 - Unknown option provided
+#######################################
+parse_arguments() {
+	while getopts "sch" opt; do
+		case "${opt}" in
+		s) _STAY_IN_PLACE=true ;;
+		c) _COMPRESS=true ;;
+		h)
+			usage
+			exit 0
+			;;
+		*)
+			err "Unknown option: ${opt}"
+			usage
+			exit 4
+			;;
+		esac
+	done
+
+	# Remaining arguments are input files
+	shift $((OPTIND - 1))
+	readonly _INPUT_FILES=("${@}")
+}
+
+#######################################
+# Validate input files exist and are readable
+#
+# EXITS:
+#   11 - No input files
+#   12 - Input file does not exist
+#   13 - Input file is not readable
+#######################################
+validate_input_files() {
+	local input_files=("${_INPUT_FILES[@]+"${_INPUT_FILES[@]}"}")
+
+	local deduped_input_files
+	mapfile -t deduped_input_files < <(remove_duplicates_from_array "${input_files[@]}")
+
+	if [[ ${#deduped_input_files[*]} -eq 0 ]]; then
+		err "No input files"
+		exit 11
+	fi
+
+	for input_file in "${deduped_input_files[@]}"; do
+		if ! [[ -e "${input_file}" ]]; then
+			err "Input file does not exist: ${input_file}"
+			exit 12
+		fi
+		if ! [[ -r "${input_file}" ]]; then
+			err "Input file is not readable: ${input_file}"
+			exit 13
+		fi
+	done
+
+	readonly _VALID_INPUT_FILES=("${deduped_input_files[@]}")
+}
+
+#######################################
+# Get output directory for input file
+#######################################
+get_output_directory_for_input_file() {
+	local input_file="$1"
+	local output_dir
+
+	if [[ -z "${_DEFAULT_OUTPUT_DIR}" ]]; then
+		case "${_STAY_IN_PLACE}" in
+		true) output_dir="$(dirname "${input_file}")" ;;
+		false) output_dir="$(dirname "${input_file}")/.baks" ;;
+		esac
+	else
+		output_dir="${_DEFAULT_OUTPUT_DIR}"
+	fi
+
+	printf "%s\n" "${output_dir}"
+}
+
+#######################################
+# Validate output directory
+#
+# EXITS:
+#   17 - Failed to create output directory
+#   18 - Output directory is not writable
+#######################################
+validate_output_directory() {
+	local output_dir="$1"
+
+	if [[ ! -d "${output_dir}" ]]; then
+		mkdir -p "${output_dir}" || {
+			err "Failed to create output directory: ${output_dir}"
+			exit 17
+		}
+	fi
+
+	if [[ ! -w "${output_dir}" ]]; then
+		err "Output directory is not writable: ${output_dir}"
+		exit 18
+	fi
+}
+
+#######################################
+# Get output filename for input file
+#######################################
+get_output_filename_for_input_file() {
+	local input_file="$1"
+	local output_filename
+	local base_name
+	base_name="$(basename "${input_file}")"
+	output_filename="${base_name}.${_TIMESTAMP}"
+
+	case "${_COMPRESS}" in
+	true) output_filename="${output_filename}.tar.gz" ;;
+	false) output_filename="${output_filename}.bak" ;;
+	esac
+
+	printf "%s\n" "${output_filename}"
+}
+
+#######################################
+# Get source type
+#######################################
+get_source_type_for_input_file() {
+	local input_file="$1"
+	local source_type
+
+	if ! [[ -f "${input_file}" ]]; then
+		source_type="directory"
+	else
+		source_type="file"
+	fi
+
+	printf "%s\n" "${source_type}"
+}
+
+#######################################
+# Validate output files do not already exist
+#
+# EXITS:
+#   19 - Output file already exists
+#######################################
+validate_output_file_does_not_exist() {
+	local output_dir="$1"
+	local output_file="$2"
+	local full_path="${output_dir}/${output_file}"
+
+	if [[ -e "${full_path}" ]]; then
+		err "Output file already exists: ${full_path}"
+		exit 19
+	fi
+}
+
+#######################################
+# Create compressed backup
+#
+# EXITS:
+#   20 - Failed to create compressed backup
+#######################################
+create_compressed_backup_of() {
+	local input_file="$1"
+	local output_dir="$2"
+	local output_file="$3"
+	local source_type="$4"
+	local parent_dir
+	local base_name
+	parent_dir="$(dirname "${input_file}")"
+	base_name="$(basename "${input_file}")"
+
+	if tar -czf "${output_dir}/${output_file}" -C "${parent_dir}" -- "${base_name}"; then
+		case "${_INTERACTIVE}" in
+		true) echo "Created backup '${output_file}'" ;;
+		false) notify-send "Created '${output_file}'" 2>/dev/null || true ;;
+		esac
+	else
+		err "Failed to create compressed backup of ${source_type} '${input_file}'"
+		exit 20
+	fi
+}
+
+#######################################
+# Create uncompressed backup
+#
+# EXITS:
+#   21 - Failed to create backup
+#######################################
+create_uncompressed_backup_of() {
+	local input_file="$1"
+	local output_dir="$2"
+	local output_file="$3"
+	local source_type="$4"
+
+	if cp -a "${input_file}" "${output_dir}/${output_file}"; then
+		case "${_INTERACTIVE}" in
+		true) echo "Created backup '${output_file}'" ;;
+		false) notify-send "Created '${output_file}'" 2>/dev/null || true ;;
+		esac
+	else
+		err "Failed to create uncompressed backup of ${source_type} '${input_file}'"
+		exit 21
+	fi
+}
+
+#######################################
+# Create backup of input file
+#######################################
+create_backup_of() {
+	local input_file="$1"
+	local source_type
+	source_type="$(get_source_type_for_input_file "${input_file}")"
+
+	local output_dir
+	output_dir="$(get_output_directory_for_input_file "${input_file}")"
+	validate_output_directory "${output_dir}"
+
+	local output_file
+	output_file="$(get_output_filename_for_input_file "${input_file}")"
+	validate_output_file_does_not_exist "${output_dir}" "${output_file}"
+
+	case "${_COMPRESS}" in
+	true) create_compressed_backup_of "${input_file}" "${output_dir}" "${output_file}" "${source_type}" ;;
+	false) create_uncompressed_backup_of "${input_file}" "${output_dir}" "${output_file}" "${source_type}" ;;
+	esac
+}
+
+#######################################
+# Display usage information
+#######################################
+usage() {
+	cat <<USAGE
+Usage: ${_SCRIPT_NAME} [OPTIONS] <input_files>
+
+Description: Create timestamped backups of files or directories.
+
+Options:
+    -s     Store backups in the current directory
+    -c     Compress backup using tar/gzip
+    -h     Show this help message
+
+Examples:
+    ${_SCRIPT_NAME} file.txt
+    ${_SCRIPT_NAME} file.txt file2.txt
+    ${_SCRIPT_NAME} -cs file.txt
+USAGE
+}
+
+#######################################
+# Perform cleanup operations when script terminates
+#
+# EXITS:
+#   $? - original exit code
+#######################################
+cleanup() {
+	local exit_code=$?
+	print_exit_code "${exit_code}"
+	exit "${exit_code}"
+}
+
+trap 'cleanup' EXIT ERR INT TERM
+
+# =============================================================================
+
+main "$@"
