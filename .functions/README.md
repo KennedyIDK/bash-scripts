@@ -67,7 +67,6 @@ Each script has its own README listing required functions and a one-liner to ins
 
 ```
 
-
 # Notes
 
 - `err`, `deb`, `warn`, `print_exit_code`, `check_required_commands` and `script_setup` are used in almost every script and therefore considered *core* functions. Other functions are *additional* functions.

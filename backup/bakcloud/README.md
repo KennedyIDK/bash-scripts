@@ -18,7 +18,13 @@ bakcloud [OPTIONS]
 -h       Show help
 ```
 
-## Required Functions
+## Depencencies
+
+### External Commands
+
+- rclone
+
+### Required Functions
 
 - script_setup
 - check_required_commands
