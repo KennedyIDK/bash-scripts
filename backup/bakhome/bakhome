@@ -1,0 +1,349 @@
+#!/usr/bin/env bash
+
+# bakhome
+#
+# Backups home directory to external drive.
+#
+# Usage: bakhome [OPTIONS]
+#
+# Options:
+#
+#   -d      Run in dry run mode
+#   -h      Show help message
+
+# TODO:
+# - Make log file more consistent with other scripts
+
+# SETTINGS
+# =============================================================================
+
+readonly _DEBUG=false
+
+set -o errexit
+set -o nounset
+set -o pipefail
+
+# VARIABLES
+# =============================================================================
+
+readonly _MULTIPLE_SYSTEMS=true
+
+readonly _BACKUP_SOURCE="${HOME}/"
+readonly _EXCLUDE_FILE="${HOME}/.config/rsync/${HOSTNAME}_rsync_exclude.txt"
+
+_BACKUP_LOCATION="/run/media/${USER}/backup_drive"
+[[ "${_MULTIPLE_SYSTEMS}" == true ]] && _BACKUP_LOCATION="${_BACKUP_LOCATION}/${HOSTNAME}/"
+readonly _BACKUP_LOCATION
+
+_EXCLUDE_FROM_BACKUP=true
+_DRY_RUN=false
+
+_VERSIONED=true
+_VERSIONED_BACKUPS=(
+	"${HOME}/bin"
+	"${HOME}/.config"
+	# "${HOME}/dotfiles"
+	"${HOME}/notes"
+)
+
+_RSYNC_FLAGS=() # rsync command flags, set by set_rsync_flags()
+
+# FUNCTIONS
+# =============================================================================
+
+main() {
+	SECONDS=0
+
+	setup_and_dependencies
+	parse_arguments "$@"
+	create_rsync_log_file
+	set_rsync_flags
+	validate_filepaths
+	perform_versioned_backups
+	backup_to_drive
+	calculate_time_taken
+}
+
+#######################################
+# Check required functions/dependencies and set global variables
+#
+# EXITS:
+#   101 - Failed to source required function
+#   102 - Failed to run script setup
+#   103 - Failed to create log directory or log file
+#   104 - Failed to check required commands
+#   127 - Missing required dependencies
+#######################################
+setup_and_dependencies() {
+	local core_functions=(
+		"script_setup"
+		"check_required_commands"
+		"print_exit_code"
+		"err"
+		"warn"
+		"deb"
+	)
+
+	local additional_functions=(
+		"ansify_string"
+	)
+
+	local external_commands=(
+		"rsync"
+	)
+
+	local required_functions=("${core_functions[@]}" "${additional_functions[@]}")
+	readonly _REQUIRED_COMMANDS=("${required_functions[@]}" "${external_commands[@]}")
+
+	local timestamp
+	timestamp="$(date +'%Y%m%d%H%M%S')"
+	local error_message
+	error_message="ERROR/${0##*/} ${timestamp}: Script failed with exit code"
+
+	local functions_dir="${HOME}/bin/.functions"
+	for function in "${required_functions[@]}"; do
+		local function_file="${functions_dir}/${function}"
+		if [[ -s "${function_file}" ]]; then
+			# shellcheck source=/dev/null
+			source "${function_file}" || {
+				printf "%s\n" "${error_message} 101 (Failed to source function ${function})" >&2
+				exit 101
+			}
+		fi
+	done
+
+	script_setup || exit 102
+}
+
+#######################################
+# Parse command line arguments
+#
+# EXITS:
+#   4 - Unknown option provided
+#   0 - Help option requested
+#######################################
+parse_arguments() {
+	while getopts "dh" opt; do
+		case "${opt}" in
+		d)
+			_DRY_RUN=true
+			;;
+		h)
+			usage
+			exit 0
+			;;
+		*)
+			err "Unknown option: ${opt}"
+			usage
+			exit 4
+			;;
+		esac
+	done
+}
+
+#######################################
+# Create rsync log file
+#
+# EXITS:
+#   11  - Failed to create rsync log file
+#######################################
+create_rsync_log_file() {
+	local timestamp
+	timestamp="$(date +%Y%m%d%H%M%S)"
+
+	_RSYNC_LOG_FILE="${_LOG_DIR}/${_SCRIPT_NAME}/rsync.${timestamp}.log"
+	readonly _RSYNC_LOG_FILE
+
+	if ! { mkdir -p "${_LOG_DIR}/${_SCRIPT_NAME}" && touch "${_RSYNC_LOG_FILE}"; }; then
+		err "Failed to create log directory or log file"
+		exit 11
+	fi
+}
+
+#######################################
+# Validate exclude file
+#
+# EXITS:
+#   12 - Exclude file does not exist
+#######################################
+validate_exclude_file() {
+	if ! [[ -f "${_EXCLUDE_FILE}" ]]; then
+		read -rp "Exclude file does not exist. Continue? (y/*): " continue
+		if [[ "${continue}" = [yY] ]]; then
+			printf "[\033[0;33mWARNING\e[0m]: Proceeding without exclude file. No files will be excluded from the backup.\n" | append_to_log
+			echo "           You can ignore this warning in future by setting the _EXCLUDE_FROM_BACKUP variable to false."
+			_EXCLUDE_FROM_BACKUP=false
+		else
+			err "No exclude file given"
+			exit 12
+		fi
+	fi
+}
+
+#######################################
+# Set rsync flags
+#######################################
+set_rsync_flags() {
+	_RSYNC_FLAGS=(
+		--archive
+		--links
+		--human-readable
+		--info=stats1
+		--info=progress2
+		--partial
+		--xattrs
+		--delete
+		--log-file="${_RSYNC_LOG_FILE}"
+	)
+
+	[[ "${_EXCLUDE_FROM_BACKUP}" == true ]] && validate_exclude_file
+	[[ "${_EXCLUDE_FROM_BACKUP}" == true ]] && _RSYNC_FLAGS+=(--exclude-from="${_EXCLUDE_FILE}" --delete-excluded)
+
+	if [[ "${_DRY_RUN}" == true ]]; then
+		_RSYNC_FLAGS+=(--dry-run)
+		warn "This is a dry run. No changes will be made."
+	fi
+}
+
+#######################################
+# Validate backup source and location directories
+#
+# EXITS:
+#   13 - Source directory not found
+#   14 - Source directory not readable
+#   15 - Failed to create location directory
+#   16 - Location directory not found
+#   17 - Location directory not writable
+#######################################
+validate_filepaths() {
+	[[ -d "${_BACKUP_SOURCE}" ]] || exit 13
+	[[ -r "${_BACKUP_SOURCE}" ]] || exit 14
+
+	if [[ "${_MULTIPLE_SYSTEMS}" == true ]]; then
+		mkdir -p "${_BACKUP_LOCATION}" || exit 15
+	fi
+
+	[[ -d "${_BACKUP_LOCATION}" ]] || exit 16
+	[[ -w "${_BACKUP_LOCATION}" ]] || exit 17
+}
+
+#######################################
+# Perform versioned backups
+#
+# EXITS:
+#   18 - Backup directory not found
+#   19 - Failed to create backup directory
+#   20 - rsync failed to backup versioned directories
+#######################################
+perform_versioned_backups() {
+	local timestamp
+	timestamp="$(date +%Y%m%d%H%M%S)"
+
+	local versioned_rsync_flags=()
+	for flag in "${_RSYNC_FLAGS[@]}"; do
+		[[ "${flag}" != "--info=progress2" && "${flag}" != "--info=stats1" ]] && versioned_rsync_flags+=("${flag}")
+	done
+
+	local backup_base_dir
+	backup_base_dir="$(dirname "${_BACKUP_LOCATION}")"
+	local versioned_backup_dir="${backup_base_dir}/${HOSTNAME}.${timestamp}"
+
+	for backup_dir in "${_VERSIONED_BACKUPS[@]}"; do
+		[[ -e "${backup_dir}" ]] || exit 18
+	done
+
+	printf "\nBacking up versioned directories to '%s'\n\n" "${versioned_backup_dir}" | append_to_log
+
+	local i=0
+	local total=${#_VERSIONED_BACKUPS[@]}
+	local complete_string
+	complete_string=$(ansify_string "Complete" "green" "default")
+
+	for backup_dir in "${_VERSIONED_BACKUPS[@]}"; do
+		local backup_dir_name
+		backup_dir_name="$(basename "${backup_dir}")"
+		backup_dir_name="${backup_dir_name#.}" # remove leading dot from hidden directories
+		local backup_dir_path="${versioned_backup_dir}/${backup_dir_name}"
+
+		mkdir -p "${backup_dir_path}" || exit 19
+
+		i=$((i + 1))
+		printf "[%s/%s] Versioned backup of %s" "${i}" "${total}" "${backup_dir_name}"
+		if rsync "${versioned_rsync_flags[@]}" "${backup_dir}" "${backup_dir_path}"; then
+			printf "\r[%s] Versioned backup of %s\n" "${complete_string}" "${backup_dir_name}" | append_to_log
+		else
+			err "Backup failed. Check the log file for details.\nLog file:${_RSYNC_LOG_FILE}"
+			exit 20
+		fi
+	done
+
+	printf "\nVersioned backups completed successfully\n" | append_to_log
+}
+
+#######################################
+# Main backup function
+#
+# EXITS:
+#   21 - rsync failed to backup home directory
+#######################################
+backup_to_drive() {
+	printf "\nBacking up '%s' to '%s'\n\n" "${_BACKUP_SOURCE}" "${_BACKUP_LOCATION}" | append_to_log
+	if rsync "${_RSYNC_FLAGS[@]}" "${_BACKUP_SOURCE}" "${_BACKUP_LOCATION}"; then
+		printf "\nBackup completed successfully\n" | append_to_log
+	else
+		err "Backup failed. Check the log file for details.\nLog file:${_RSYNC_LOG_FILE}"
+		exit 21
+	fi
+}
+
+#######################################
+# Calculate time taken
+#######################################
+calculate_time_taken() {
+	local hours minutes secs
+	hours=$((SECONDS / 3600))
+	minutes=$(((SECONDS % 3600) / 60))
+	secs=$((SECONDS % 60))
+
+	printf "Time taken: %sh %sm %ss\n" "${hours}" "${minutes}" "${secs}" | append_to_log
+}
+
+#######################################
+# Append output to log file while removing ANSI color codes
+#######################################
+append_to_log() {
+	tee >(sed 's/\x1b\[[0-9;]*m//g' >>"${_RSYNC_LOG_FILE}")
+}
+
+#######################################
+# Display usage information
+#######################################
+usage() {
+	cat <<USAGE
+Usage: ${_SCRIPT_NAME} [OPTIONS]
+
+Description: Backup home directory to external drive
+
+Options:
+    -d    Run in dry run mode
+    -h    Show this help message
+USAGE
+}
+
+#######################################
+# Perform cleanup operations when script terminates.
+#
+# EXITS:
+#   $? - original exit code
+#######################################
+cleanup() {
+	local exit_code=$?
+	print_exit_code "${exit_code}"
+	exit "${exit_code}"
+}
+
+trap 'cleanup' EXIT ERR INT TERM
+
+# =============================================================================
+
+main "$@"
