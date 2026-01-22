@@ -1,0 +1,408 @@
+#!/usr/bin/env bash
+
+# bakcloud
+#
+# Backup files to cloud storage using rclone.
+#
+# Usage:
+#   bakcloud [options]
+#
+# Options:
+#   -q   Quiet mode
+#   -d   Dry run mode
+#   -e   Edit backup sources file
+#   -x   Edit exclude file
+#   -h   Show help
+
+# TODO:
+#  - Rework the log file to be more consistent with other scripts.
+
+# SETTINGS
+# =============================================================================
+
+readonly _DEBUG=false
+
+set -o errexit
+set -o nounset
+set -o pipefail
+
+# VARIABLES
+# =============================================================================
+
+readonly _BACKUP_SOURCES_FILE="${HOME}/.config/rclone/${HOSTNAME}_bakcloud-sources"
+readonly _EXCLUDE_FILE="${HOME}/.config/rclone/${HOSTNAME}_rclone_exclude.txt"
+readonly _RCLONE_CONFIG="${HOME}/.config/rclone/rclone.conf"
+
+# rclone remotes
+readonly _GDRIVE_ENCRYPTED="enc_gdrive:$HOSTNAME"
+readonly _GDRIVE_HOME="gdrive:~$HOSTNAME"
+readonly _GDRIVE_SHARED="gdrive:"
+
+_RCLONE_FLAGS=()  # rclone command flags, set by set_rclone_flags()
+_DRY_RUN=false    # dry run mode
+_QUIET_MODE=false # quiet mode
+
+# FUNCTIONS
+# =============================================================================
+
+main() {
+	SECONDS=0
+	declare -g _ENCRYPT_SIZE=0     # size of encrypted files
+	declare -g _NON_ENCRYPT_SIZE=0 # size of non-encrypted files
+	declare -g _SHARED_SIZE=0      # size of shared files
+
+	setup_and_dependencies
+	parse_arguments "$@"
+	validate_rclone_config
+	validate_input_sources
+	create_rclone_log_file
+	set_rclone_flags
+	backup_all_sources_to_cloud
+	calculate_total_size
+	calculate_time_taken
+}
+
+#######################################
+# Check required functions/dependencies and set global variables
+#
+# EXITS:
+#   101 - Failed to source required function
+#   102 - Failed to run script setup
+#   103 - Failed to create log directory or log file
+#   104 - Failed to check required commands
+#   127 - Missing required dependencies
+#######################################
+setup_and_dependencies() {
+	local core_functions=(
+		"script_setup"
+		"check_required_commands"
+		"print_exit_code"
+		"err"
+		"warn"
+		"deb"
+	)
+
+	local additional_functions=(
+	)
+
+	local external_commands=(
+		"rclone"
+		"bc"
+	)
+
+	local required_functions=("${core_functions[@]}" "${additional_functions[@]}")
+	readonly _REQUIRED_COMMANDS=("${required_functions[@]}" "${external_commands[@]}")
+
+	local timestamp
+	timestamp="$(date +'%Y%m%d%H%M%S')"
+	local error_message
+	error_message="ERROR/${0##*/} ${timestamp}: Script failed with exit code"
+
+	local functions_dir="${HOME}/bin/.functions"
+	for function in "${required_functions[@]}"; do
+		local function_file="${functions_dir}/${function}"
+		if [[ -s "${function_file}" ]]; then
+			# shellcheck source=/dev/null
+			source "${function_file}" || {
+				printf "%s\n" "${error_message} 101 (Failed to source function ${function})" >&2
+				exit 101
+			}
+		fi
+	done
+
+	script_setup || exit 102
+}
+
+#######################################
+# Parse command line arguments
+#
+# EXITS:
+#   4 - Unknown option provided
+#   0 - Backup sources file opened in editor or help option requested
+#   15 - Failed to edit backup sources file
+#   16 - Failed to edit exclude file
+#######################################
+parse_arguments() {
+	local editor="${EDITOR:-${VISUAL:-vi}}"
+
+	while getopts "qdEhX" opt; do
+		case "${opt}" in
+		q) _QUIET_MODE=true ;;
+		d) _DRY_RUN=true ;;
+		E)
+			${editor} "${_BACKUP_SOURCES_FILE}" || exit 15
+			exit 0
+			;;
+		X)
+			${editor} "${_EXCLUDE_FILE}" || exit 16
+			exit 0
+			;;
+		h)
+			usage && exit 0
+			;;
+		*)
+			err "Invalid option: -${opt}"
+			exit 4
+			;;
+		esac
+	done
+}
+
+#######################################
+# Validate rclone configuration
+#
+# EXITS:
+#   11 - Rclone config does not exist
+#   12 - Backup sources file does not exist
+#   13 - Exclude file does not exist
+#######################################
+validate_rclone_config() {
+	[[ -f "${_RCLONE_CONFIG}" ]] || exit 11
+	[[ -f "${_BACKUP_SOURCES_FILE}" ]] || exit 12
+
+	if [[ ! -f "${_EXCLUDE_FILE}" ]]; then
+		if [[ "${_INTERACTIVE}" == "true" ]] && [[ "${_QUIET_MODE}" == "false" ]]; then
+			read -r -p "Exclude file does not exist: '${_EXCLUDE_FILE}'. Continue? (y/*): " continue
+			[[ "${continue}" == "y" ]] || exit 13
+		fi
+	fi
+}
+
+#######################################
+# Validate input sources
+#
+# EXITS:
+#   17 - Failed to source backup sources file
+#   18 - Input source does not exist
+#   19 - Duplicate input source
+#######################################
+validate_input_sources() {
+	declare -g _ENCRYPT=()
+	declare -g _NON_ENCRYPT=()
+	declare -g _SHARED=()
+
+	# shellcheck source=/dev/null
+	source "${_BACKUP_SOURCES_FILE}" || exit 17
+
+	local -a all_sources=()
+	[[ ${#_ENCRYPT[@]} -gt 0 ]] && all_sources+=("${_ENCRYPT[@]}")
+	[[ ${#_NON_ENCRYPT[@]} -gt 0 ]] && all_sources+=("${_NON_ENCRYPT[@]}")
+	[[ ${#_SHARED[@]} -gt 0 ]] && all_sources+=("${_SHARED[@]}")
+
+	if [[ ${#all_sources[@]} -eq 0 ]]; then
+		warn "No backup sources configured"
+		return 0
+	fi
+
+	local -A seen_files
+	local source
+	for source in "${all_sources[@]}"; do
+		if [[ ! -e "${source}" ]]; then
+			err "Input source does not exist: '${source}'"
+			exit 18
+		fi
+		if [[ -n "${seen_files[${source}]:-}" ]]; then
+			err "Duplicate input source: '${source}'"
+			exit 19
+		fi
+		seen_files["${source}"]=1
+	done
+}
+
+#######################################
+# rclone log file and flags
+
+# EXITS:
+#   14  - Failed to create rclone log file
+#######################################
+create_rclone_log_file() {
+	local log_dir="${_LOG_DIR}/${_SCRIPT_NAME}"
+
+	local timestamp
+	timestamp="$(date +%Y%m%d%H%M%S)-$$"
+
+	_RCLONE_LOG_FILE="${log_dir}/rclone.${timestamp}.log"
+	readonly _RCLONE_LOG_FILE
+
+	if ! { mkdir -p "${log_dir}" && touch "${_RCLONE_LOG_FILE}"; }; then
+		err "Failed to create rclone log file"
+		exit 14
+	fi
+}
+
+#######################################
+# Set rclone flags
+#######################################
+set_rclone_flags() {
+	local rclone_flags=()
+
+	[[ "${_QUIET_MODE}" == "true" ]] || rclone_flags+=(--progress)
+
+	if [[ "${_DRY_RUN}" == "true" ]]; then
+		rclone_flags+=(--dry-run)
+		warn "This is a dry run. No changes will be made."
+	fi
+
+	rclone_flags+=(
+		--links
+		--log-file "${_RCLONE_LOG_FILE}"
+	)
+
+	if [[ -f "${_EXCLUDE_FILE}" ]]; then
+		rclone_flags+=(--exclude-from "${_EXCLUDE_FILE}" --delete-excluded)
+	fi
+
+	readonly _RCLONE_FLAGS=("${rclone_flags[@]}")
+}
+
+#######################################
+# Sync source to cloud storage
+#
+# EXITS:
+#   20 - Failed to sync item to cloud storage
+#######################################
+sync_source_to_cloud() {
+	local source="$1"
+	local dest="$2"
+	local size_var="$3"
+	local size
+	declare -n size_ref="${size_var}"
+
+	local source_name
+	source_name=$(basename "${source}")
+
+	local relative_path
+	relative_path="${source/#${HOME}\//}"
+
+	local confirmation_message="\nSyncing ${source_name} to ${dest}/${relative_path}:"
+
+	if [[ "${_QUIET_MODE}" == "true" ]]; then
+		printf "%s\n" "Syncing ${source_name}" &&
+			printf "%b\n" "${confirmation_message}" | append_to_log >/dev/null
+	else
+		printf "%b\n" "${confirmation_message}" | append_to_log
+	fi
+
+	if rclone sync "${source}" "${dest}/${relative_path}" "${_RCLONE_FLAGS[@]}"; then
+		if ! size=$(du -s --block-size=1 "${source}" | awk '{print $1}') || [[ -z "${size}" ]]; then
+			warn "Failed to calculate size for ${source}, using 0"
+			size=0
+		fi
+		size_ref=$((size_ref + size))
+	else
+		err "Failed to sync ${source}"
+		exit 20
+	fi
+}
+
+#######################################
+# Backup configured sources to cloud
+#######################################
+backup_all_sources_to_cloud() {
+	local size_gb
+	local -r backup_configs=(
+		"_ENCRYPT" "${_GDRIVE_ENCRYPTED}" "Encrypted files"
+		"_NON_ENCRYPT" "${_GDRIVE_HOME}" "Non-encrypted files"
+		"_SHARED" "${_GDRIVE_SHARED}" "Shared files"
+	)
+
+	local source_array destination description size_var
+	for ((i = 0; i < ${#backup_configs[@]}; i += 3)); do
+		source_array="${backup_configs[i]}"
+		destination="${backup_configs[i + 1]}"
+		description="${backup_configs[i + 2]}"
+		size_var="${source_array}_SIZE"
+
+		printf "\n\e[4;32m%s:\e[0m\n" "${description}" | append_to_log
+
+		declare -n items="${source_array}"
+		if [[ ${#items[@]} -gt 0 ]]; then
+			for item in "${items[@]}"; do
+				sync_source_to_cloud "${item}" "${destination}" "${size_var}"
+			done
+		else
+			printf "\nNo items to backup.\n" | append_to_log
+		fi
+
+		size_gb=$(echo "scale=2; ${!size_var} / 1073741824" | bc)
+		if [[ -z "${size_gb}" ]]; then
+			err "Failed to calculate size of ${description}"
+		else
+			printf "\n%s GB of %s backed up.\n" "${size_gb}" "${description}" | append_to_log
+		fi
+	done
+
+	printf "\nBackup complete.\n" | append_to_log
+}
+
+#######################################
+# Calculate and display total backup size
+#######################################
+calculate_total_size() {
+	local total_size total_size_gb
+	total_size=$((_ENCRYPT_SIZE + _NON_ENCRYPT_SIZE + _SHARED_SIZE))
+
+	if ! total_size_gb=$(echo "scale=2; ${total_size} / 1073741824" | bc); then
+		err "Failed to calculate total backup size"
+	else
+		printf "Total backup size: %s GB\n" "${total_size_gb}" | append_to_log
+	fi
+}
+
+#######################################
+# Calculate and display time taken for backup operation.
+# Used by: main()
+# Input Variables:
+#   SECONDS - bash built-in variable for elapsed time
+#######################################
+calculate_time_taken() {
+	local hours minutes secs
+	hours=$((SECONDS / 3600))
+	minutes=$(((SECONDS % 3600) / 60))
+	secs=$((SECONDS % 60))
+
+	printf "Time taken: %sh %sm %ss\n" "${hours}" "${minutes}" "${secs}" | append_to_log
+}
+
+#######################################
+# Append output to log file while removing ANSI color codes
+#######################################
+append_to_log() {
+	tee >(sed 's/\x1b\[[0-9;]*m//g' >>"${_RCLONE_LOG_FILE}")
+}
+
+#######################################
+# Display usage information
+#######################################
+usage() {
+	cat <<USAGE
+Usage: ${_SCRIPT_NAME} [options]
+
+Description: Backup files to cloud storage using rclone.
+
+Options:
+  -q   Quiet mode
+  -d   Dry run mode
+  -E   Edit backup sources file
+  -X   Edit exclude file
+  -h   Show help
+USAGE
+}
+
+#######################################
+# Perform cleanup operations when script terminates
+#
+# EXITS:
+#   $? - original exit code
+#######################################
+cleanup() {
+	local exit_code=$?
+	print_exit_code "${exit_code}"
+	exit "${exit_code}"
+}
+
+trap 'cleanup' EXIT ERR INT TERM
+
+# =============================================================================
+
+main "$@"
