@@ -1,0 +1,177 @@
+#!/usr/bin/env bash
+
+# flip - Coin flip simulation script.
+#
+# Simulates flipping a coin one or multiple times and displays results.
+#
+# Usage: flip [number_of_flips]
+#   - No arguments: Single coin flip
+#   - One argument: Multiple flips
+
+# SETTINGS
+# =============================================================================
+
+set -o errexit
+set -o nounset
+set -o pipefail
+
+# VARIABLES
+# =============================================================================
+
+_SCRIPT_NAME="${0##*/}"
+readonly _SCRIPT_NAME
+
+_SINGLE_FLIP=
+_NUMBER_OF_FLIPS=
+
+# FUNCTIONS
+# =============================================================================
+
+main() {
+	validate_arguments "$@"
+
+	case "${_SINGLE_FLIP}" in
+	true) flip_coin ;;
+	false) flip_multiple "${_NUMBER_OF_FLIPS}" ;;
+	esac
+}
+
+#######################################
+# Display error message
+#######################################
+err() {
+	printf "%s\n" "[ERROR/${_SCRIPT_NAME} $(date +'%Y%m%dT%H%M%S')]: $*" >&2
+}
+
+#######################################
+# Validate arguments
+#######################################
+validate_arguments() {
+	case $# in
+	0) _SINGLE_FLIP=true ;;
+	1)
+		if [[ "${1}" =~ ^[0-9]+$ ]] && (($1 > 0)) && (($1 <= 10000000)); then
+			_SINGLE_FLIP=false
+			_NUMBER_OF_FLIPS="${1}"
+		elif [[ "${1}" =~ ^[0-9]+$ ]]; then
+			err "Number of flips must be between 1 and 10,000,000"
+			usage
+			exit 1
+		else
+			err "Please provide a valid number of flips"
+			usage
+			exit 1
+		fi
+		;;
+	*)
+		err "Too many arguments"
+		usage
+		exit 1
+		;;
+	esac
+
+	readonly _SINGLE_FLIP
+	readonly _NUMBER_OF_FLIPS
+}
+
+#######################################
+# Display ASCII art
+#######################################
+display_heads_ascii_art() {
+	cat <<'HEADS_ASCII_ART'
+   ╔═════╗
+  ║       ║
+ ║  HEADS  ║
+  ║       ║
+   ╚═════╝
+HEADS_ASCII_ART
+}
+display_tails_ascii_art() {
+	cat <<'TAILS_ASCII_ART'
+   ╔═════╗
+  ║       ║
+ ║  TAILS  ║
+  ║       ║
+   ╚═════╝
+TAILS_ASCII_ART
+}
+
+#######################################
+# Flip a coin
+#######################################
+flip_coin() {
+	local result
+	result="$((RANDOM % 2))"
+
+	case "${result}" in
+	0) display_heads_ascii_art ;;
+	1) display_tails_ascii_art ;;
+	esac
+}
+
+#######################################
+# Flip a coin multiple times
+#######################################
+flip_multiple() {
+	SECONDS=0
+	local count="$1"
+	local heads=0
+	local tails=0
+	local i
+
+	echo "Flipping coin ${count} times..."
+	echo "----------------------------------------"
+
+	local padding_width
+	padding_width="${#count}"
+
+	for ((i = 1; i <= count; i++)); do
+		local result
+		result="$((RANDOM % 2))"
+		local result_text
+		case "${result}" in
+		0)
+			result_text="HEADS"
+			((heads += 1))
+			;;
+		1)
+			result_text="TAILS"
+			((tails += 1))
+			;;
+		esac
+		printf "\rFlip %0${padding_width}d: %s" "${i}" "${result_text}"
+	done
+	printf "\r%*s\r" 50 "" # Clear the final flip line
+
+	echo "Results:"
+	echo "Heads: ${heads}"
+	echo "Tails: ${tails}"
+	# echo "Total: ${count}"
+
+	if ((heads > tails)); then
+		echo "Heads wins by $((heads - tails)) flips!"
+	elif ((tails > heads)); then
+		echo "Tails wins by $((tails - heads)) flips!"
+	else
+		echo "It's a tie!"
+	fi
+
+	if ((SECONDS > 2)); then
+		echo "Took ${SECONDS} seconds"
+	fi
+}
+
+#######################################
+# Usage
+#######################################
+usage() {
+	cat <<USAGE
+Usage: 
+  ${_SCRIPT_NAME}                    # Single coin flip
+  ${_SCRIPT_NAME} [number of flips]  # Multiple coin flips
+USAGE
+}
+
+# =============================================================================
+
+main "$@"
