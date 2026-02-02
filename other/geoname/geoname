@@ -1,0 +1,470 @@
+#!/usr/bin/env bash
+
+# geoname
+#
+# A script to rename photos and videos based on their location metadata.
+# Uses exiftool to extract metadata and OpenStreetMap for location data.
+#
+# Usage: geoname [OPTIONS] <directory>/<files>
+#
+# Options:
+#   -h, --help      Show help message
+
+# SETTINGS
+# =============================================================================
+
+readonly _DEBUG=false
+
+set -o errexit
+set -o nounset
+set -o pipefail
+
+# VARIABLES
+# =============================================================================
+
+# FUNCTIONS
+# =============================================================================
+
+main() {
+	setup_and_dependencies
+	parse_arguments "${@}"
+	validate_input_files
+	process_input_files
+}
+
+#######################################
+# Check required functions/dependencies and set global variables
+#
+# EXITS:
+#   101 - Failed to source functions file
+#   102 - Failed to run script setup
+#   103 - Failed to create log directory or log file
+#   104 - Failed to check required commands
+#   127 - Missing required commands
+#######################################
+setup_and_dependencies() {
+	local core_functions=(
+		"script_setup"
+		"check_required_commands"
+		"print_exit_code"
+		"err"
+		"warn"
+		"deb"
+	)
+
+	local additional_functions=(
+		"remove_duplicates_from_array"
+		"print_separator"
+		"create_video_thumbnail_for"
+		"create_image_thumbnail_for"
+	)
+
+	local external_commands=(
+		"curl"
+		"jq"
+		"magick"
+		"ffmpeg"
+		"kitty"
+		"exiftool"
+	)
+
+	local required_functions=("${core_functions[@]}" "${additional_functions[@]}")
+	readonly _REQUIRED_COMMANDS=("${required_functions[@]}" "${external_commands[@]}")
+
+	local timestamp
+	timestamp="$(date +'%Y%m%d%H%M%S')"
+	local error_message
+	error_message="ERROR/${0##*/} ${timestamp}: Script failed with exit code"
+
+	local functions_dir="${HOME}/bin/.functions"
+	for function in "${required_functions[@]}"; do
+		local function_file="${functions_dir}/${function}"
+		if [[ -s "${function_file}" ]]; then
+			# shellcheck source=/dev/null
+			source "${function_file}" || {
+				printf "%s\n" "${error_message} 101 (Failed to source function ${function})" >&2
+				exit 101
+			}
+		fi
+	done
+
+	script_setup || exit 102
+}
+
+#######################################
+# Prompt user to continue with all files in directory
+#######################################
+prompt_user_to_continue_with_all_files_in_directory() {
+	local directory="$1"
+
+	local continue_with_all_files
+	echo
+	read -r -p "Would you like to include all images/videos in the ${directory} directory? (y/*): " continue_with_all_files
+
+	[[ "${continue_with_all_files}" = "y" ]] && _INPUT_FILES+=("${directory}"/*)
+}
+
+#######################################
+# Include input files in directories
+#######################################
+determine_recursive_input_files() {
+	[[ "${#_INPUT_FILES[@]}" -eq 0 ]] && prompt_user_to_continue_with_all_files_in_directory "${PWD}"
+
+	for input_file in "${_INPUT_FILES[@]}"; do
+		if [[ -d "${input_file}" ]]; then
+			prompt_user_to_continue_with_all_files_in_directory "${input_file}"
+		fi
+	done
+}
+
+#######################################
+# Parse command line arguments
+#
+# EXITS:
+#   0 - Help requested
+#   4 - Unknown option provided
+#######################################
+parse_arguments() {
+	while getopts "h" opt; do
+		case "${opt}" in
+		h)
+			usage
+			exit 0
+			;;
+		*)
+			err "Unknown option: ${opt}"
+			usage
+			exit 4
+			;;
+		esac
+	done
+
+	# Remaining arguments are input files
+	shift $((OPTIND - 1))
+	_INPUT_FILES=("${@}")
+	determine_recursive_input_files
+}
+
+#######################################
+# Validate input files
+#
+# EXITS:
+#   11 - No input files provided
+#   12 - No valid input files found
+#######################################
+validate_input_files() {
+	[[ "${#_INPUT_FILES[@]}" -eq 0 ]] && exit 11
+
+	local valid_input_files=()
+	for input_file in "${_INPUT_FILES[@]}"; do
+		local mime_type
+		mime_type="$(file --mime-type -b "${input_file}")"
+		if [[ "${mime_type}" =~ ^(image|video)/ ]]; then
+			valid_input_files+=("${input_file}")
+		fi
+	done
+
+	mapfile -t valid_input_files < <(remove_duplicates_from_array "${valid_input_files[@]}")
+
+	[[ "${#valid_input_files[@]}" -eq 0 ]] && exit 12
+
+	printf "\n%d valid input files found.\n" "${#valid_input_files[@]}"
+	_VALID_INPUT_FILES=("${valid_input_files[@]}")
+}
+
+#######################################
+# Sanitize a string for use in filenames
+# Replaces problematic characters that could cause issues
+#######################################
+sanitize_filename_component() {
+	local input="$1"
+	# Replace / with - (common in location names like "N/A" or "Old Montreal/Vieux-Montréal")
+	# Remove control characters, newlines, null bytes
+	# Squeeze multiple spaces into single space
+	printf "%s" "${input}" | tr '/' '-' | tr -d '\000-\037' | tr -s ' '
+}
+
+#######################################
+# Get location data for an input file from OpenStreetMap
+# Uses caching to avoid redundant API calls and respects rate limits
+#######################################
+get_location_data_for() {
+	local input_file="$1"
+	local latitude
+	local longitude
+
+	latitude="$(exiftool -m -GPSLatitude -b "${input_file}")"
+	longitude="$(exiftool -m -GPSLongitude -b "${input_file}")"
+
+	[[ -z "${latitude}" || -z "${longitude}" ]] && printf "N/A\n" && return
+
+	if ! [[ "${latitude}" =~ ^-?[0-9]+\.?[0-9]*$ ]] || ! [[ "${longitude}" =~ ^-?[0-9]+\.?[0-9]*$ ]]; then
+		warn "Invalid GPS coordinates format in ${input_file}"
+		printf "N/A\n"
+		return
+	fi
+
+	local cache_key="${latitude}_${longitude}"
+	local cache_dir="${HOME}/.cache/geoname"
+	local cache_file="${cache_dir}/${cache_key}.json"
+
+	if [[ -f "${cache_file}" ]]; then
+		cat "${cache_file}"
+		return
+	fi
+
+	# Rate limiting - Nominatim allows max 1 request per second
+	local last_api_call_file="${cache_dir}/.last_api_call"
+	mkdir -p "${cache_dir}"
+	if [[ -f "${last_api_call_file}" ]]; then
+		local last_call
+		last_call="$(cat "${last_api_call_file}")"
+		local current_time
+		current_time="$(date +%s)"
+		local elapsed=$((current_time - last_call))
+		if [[ "${elapsed}" -lt 1 ]]; then
+			sleep $((1 - elapsed))
+		fi
+	fi
+
+	local temp_response
+	temp_response="$(mktemp)"
+	local http_code
+
+	# Nominatim asks for a User-Agent header to identify the client
+	http_code="$(curl -s -w "%{http_code}" -o "${temp_response}" \
+		-H "User-Agent: geoname/1.0 (https://github.com/yourusername/geoname)" \
+		"https://nominatim.openstreetmap.org/reverse?format=json&lat=${latitude}&lon=${longitude}")"
+
+	if [[ "${http_code}" != "200" ]]; then
+		warn "API request failed with HTTP ${http_code} for ${input_file}"
+		rm -f "${temp_response}"
+		printf "N/A\n"
+		return
+	fi
+
+	local location_data
+	location_data="$(<"${temp_response}")"
+	rm -f "${temp_response}"
+
+	if ! jq -e . >/dev/null 2>&1 <<<"${location_data}"; then
+		warn "Invalid JSON response from API for ${input_file}"
+		printf "N/A\n"
+		return
+	fi
+
+	date +%s >"${last_api_call_file}"
+
+	printf "%s\n" "${location_data}" >"${cache_file}"
+
+	printf "%s\n" "${location_data}"
+}
+
+#######################################
+# Get timestamp for an input file
+#######################################
+get_timestamp_for() {
+	local input_file="$1"
+	local timestamp
+	timestamp="$(exiftool -m -CreateDate -b "${input_file}" 2>/dev/null | tr -d ': ')"
+	printf "%s\n" "${timestamp:-Unknown}"
+}
+
+#######################################
+# Generate filename options for an input file
+#######################################
+generate_filename_options_for() {
+	local input_file="$1"
+	local file_extension
+	file_extension="${input_file##*.}"
+	local location_data
+	location_data="$(get_location_data_for "${input_file}")"
+	local timestamp
+	timestamp="$(get_timestamp_for "${input_file}")"
+
+	local filename_options=()
+	local location_keys=(
+		"waterway" "tunnel" "bridge" "tourism" "shop" "mountain_pass" "office"
+		"leisure" "craft" "club" "aeroway" "amenity" "boundary" "aerialway"
+		"man_made" "railway" "place" "landuse" "natural" "military" "historic"
+		"emergency" "house_name" "road" "retail" "commercial" "industrial"
+		"farmyard" "farm" "residential" "city_block" "quarter" "allotments"
+		"neighbourhood" "isolated_dwelling" "croft" "hamlet" "subdivision"
+		"suburb" "borough" "subdistrict" "district" "city_district" "village"
+		"town" "city" "municipality" "county" "state_district" "state" "region"
+		"country" "continent"
+	)
+
+	for key in "${location_keys[@]}"; do
+		local location
+		location="$(jq -r ".address.${key}" <<<"${location_data}")"
+
+		# Location aliases
+		case "${location}" in
+		"Callaghan Lane") location="Dundas Street East" ;;
+		esac
+
+		if [[ "${location}" != "null" ]]; then
+			local sanitized_location
+			sanitized_location="$(sanitize_filename_component "${location}")"
+			local filename="${timestamp} ${sanitized_location}.${file_extension}"
+			filename_options+=("${filename}")
+		fi
+	done
+
+	printf "%s\n" "${filename_options[@]}"
+}
+
+#######################################
+# Prompt for choice of filename option
+#
+# EXITS:
+#   13 - Invalid choice provided
+#######################################
+prompt_for_output_file_for() {
+	local input_file="$1"
+	local file_extension
+	file_extension="${input_file##*.}"
+	local timestamp
+	timestamp="$(get_timestamp_for "${input_file}")"
+
+	local filename_options
+	mapfile -t filename_options < <(generate_filename_options_for "${input_file}")
+
+	if [[ "${#filename_options[@]}" -eq 0 ]]; then
+		printf "\nNo location data found. Please enter a custom filename:\n"
+		read -r -p "Enter filename (without extension): " choice
+		if [[ -n "${choice}" ]]; then
+			local sanitized_choice
+			sanitized_choice="$(sanitize_filename_component "${choice}")"
+			_OUTPUT_FILE="${timestamp} ${sanitized_choice}.${file_extension}"
+		else
+			_OUTPUT_FILE="${timestamp}.${file_extension}"
+		fi
+	else
+		# Display filename options
+		echo
+		local i=1
+		for option in "${filename_options[@]}"; do
+			printf "  %d) %s\n" "${i}" "${option}"
+			i=$((i + 1))
+		done
+		printf "\nPlease select a filename by entering the corresponding number or a custom string:\n"
+		read -r -p "Enter your choice (1-${#filename_options[@]}): " choice
+		if [[ "${choice}" =~ ^[0-9]+$ ]] && [[ "${choice}" -ge 1 ]] && [[ "${choice}" -le "${#filename_options[@]}" ]]; then
+			# Valid numeric choice
+			_OUTPUT_FILE="${filename_options[$((choice - 1))]}"
+		elif [[ "${choice}" =~ ^[0-9]+$ ]]; then
+			# Numeric but out of range
+			err "Invalid choice, must be between 1 and ${#filename_options[@]}"
+			exit 13
+		else
+			# Non-numeric: treat as custom string
+			if [[ -n "${choice}" ]]; then
+				local sanitized_choice
+				sanitized_choice="$(sanitize_filename_component "${choice}")"
+				_OUTPUT_FILE="${timestamp} ${sanitized_choice}.${file_extension}"
+			else
+				_OUTPUT_FILE="${timestamp}.${file_extension}"
+			fi
+		fi
+	fi
+}
+
+#######################################
+# Process input files
+#
+# EXITS:
+#   14 - Failed to rename input file
+#######################################
+process_input_files() {
+	local input_files=("${_VALID_INPUT_FILES[@]}")
+	local total_files="${#input_files[@]}"
+
+	local i=0
+	for input_file in "${input_files[@]}"; do
+		i=$((i + 1))
+		local mime_type
+		mime_type="$(file --mime-type -b "${input_file}")"
+
+		echo && print_separator && echo
+
+		if [[ "${mime_type}" =~ ^(image)/ ]]; then
+			create_image_thumbnail_for "${input_file}"
+		elif [[ "${mime_type}" =~ ^(video)/ ]]; then
+			printf "Creating video thumbnail...\n\n"
+			create_video_thumbnail_for "${input_file}"
+		fi
+
+		printf "\n[%d/%d] %s:\n" "${i}" "${total_files}" "${input_file}"
+		prompt_for_output_file_for "${input_file}"
+
+		local input_dir
+		input_dir="$(dirname "${input_file}")"
+		local output_path="${input_dir}/${_OUTPUT_FILE}"
+
+		if [[ "${input_file}" == "${output_path}" ]]; then
+			printf "\nFile already has the correct filename, skipping...\n"
+			continue
+		fi
+
+		if [[ -f "${output_path}" ]]; then
+			if cmp -s "${input_file}" "${output_path}"; then
+				printf "\nFile already exists with new name. Deleting duplicate file and skipping...\n"
+				rm -f "${input_file}"
+				continue
+			else
+				echo
+				err "File already exists with new name. Skipping..."
+				continue
+			fi
+		fi
+
+		if mv "${input_file}" "${output_path}"; then
+			printf "\n'%s' -> '%s'\n" "${input_file##*/}" "${_OUTPUT_FILE}"
+		else
+			err "Failed to rename '${input_file}' to '${output_path}'"
+			exit 14
+		fi
+	done
+
+	echo && print_separator && printf "\nAll files processed.\n"
+}
+
+#######################################
+# Display usage information
+#######################################
+usage() {
+	cat <<-EOF
+		Usage: ${0##*/} [OPTIONS] <directory>/<files>
+
+		A script to rename photos and videos based on their location metadata.
+		Uses exiftool to extract metadata and OpenStreetMap for location data.
+
+		Options:
+		  -h, --help      Show this help message
+
+		Examples:
+		  ${0##*/} photo.jpg
+		  ${0##*/} *.jpg
+		  ${0##*/} /path/to/photos/
+	EOF
+}
+
+#######################################
+# Perform cleanup when script terminates
+#######################################
+cleanup() {
+	local exit_code=$?
+
+	rm -f video_thumbnail.png
+
+	print_exit_code "${exit_code}"
+	exit "${exit_code}"
+}
+
+trap 'cleanup' EXIT ERR INT TERM
+
+# =============================================================================
+
+main "$@"
