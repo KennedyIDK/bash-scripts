@@ -1,0 +1,586 @@
+#!/usr/bin/env bash
+
+# agent
+#
+# A simple wrapper around the age encryption tool that supports both key-based
+# and password-based encryption/decryption.
+#
+# Usage: agent [OPTIONS] <input_files>
+#
+# OPTIONS:
+#   -d                 Decrypt mode (default is encrypt)
+#   -p                 Use password-based encryption (default is key-based)
+#   -r                 Remove original file after successful processing
+#   -b <bundle_name>   Bundle mode (bundle input files into a single file before encrypting)
+#   -q                 Quiet mode (no output to terminal)
+#   -h                 Show help message
+
+# SETTINGS
+# =============================================================================
+
+readonly _DEBUG=false
+
+set -o errexit
+set -o nounset
+set -o pipefail
+
+# VARIABLES
+# =============================================================================
+
+_INPUT_FILES=()       # array of input files, set by parse_arguments()
+_VALID_INPUT_FILES=() # array of validated input files, set by get_valid_input_files()
+
+_PASSWORD_MODE=false   # default is key-based
+_DECRYPT_MODE=false    # default is encrypt
+_BUNDLE_MODE=false     # default is to encrypt each file separately
+_BUNDLE_NAME=""        # name for bundled output file, set by parse_arguments()
+_REMOVE_ORIGINAL=false # default is to prompt user
+_QUIET_MODE=false      # default is to print messages
+
+# Source shell configuration if age keys are not available in environment
+if [[ -z "${AGE_PUBKEY:-}" ]] || [[ -z "${AGE_SECKEY:-}" ]]; then
+	while IFS= read -r line; do
+		eval "${line}" 2>/dev/null || true
+	done < <(grep -E '^export (AGE_PUBKEY|AGE_SECKEY)=' "${HOME}/.bashrc" 2>/dev/null || true)
+fi
+readonly _PUBLIC_KEY="${AGE_PUBKEY:-}"  # public key for key-based encryption
+readonly _PRIVATE_KEY="${AGE_SECKEY:-}" # private key for key-based decryption
+
+# FUNCTIONS
+# =============================================================================
+
+main() {
+	setup_and_dependencies
+	parse_arguments "${@}"
+	get_valid_input_files
+	validate_age_keys
+	validate_encryption_mode
+	process_input_files
+}
+
+#######################################
+# Check required functions/dependencies and set global variables
+#
+# EXITS:
+#   101 - Failed to source required function
+#   102 - Failed to run script setup
+#   103 - Failed to create log directory or log file
+#   104 - Failed to check required commands
+#   127 - Missing required dependencies
+#######################################
+setup_and_dependencies() {
+	local core_functions=(
+		"script_setup"
+		"check_required_commands"
+		"print_exit_code"
+		"err"
+		"warn"
+		"deb"
+	)
+
+	local additional_functions=(
+		"remove_duplicates_from_array"
+		"ansify_string"
+	)
+
+	local external_commands=(
+		"age"
+	)
+
+	local required_functions=("${core_functions[@]}" "${additional_functions[@]}")
+	readonly _REQUIRED_COMMANDS=("${required_functions[@]}" "${external_commands[@]}")
+
+	local timestamp
+	timestamp="$(date +'%Y%m%d%H%M%S')"
+	local error_message
+	error_message="ERROR/${0##*/} ${timestamp}: Script failed with exit code"
+
+	local functions_dir="${HOME}/bin/.functions"
+	for function in "${required_functions[@]}"; do
+		local function_file="${functions_dir}/${function}"
+		if [[ -s "${function_file}" ]]; then
+			# shellcheck source=/dev/null
+			source "${function_file}" || {
+				printf "%s\n" "${error_message} 101 (Failed to source function ${function})" >&2
+				exit 101
+			}
+		fi
+	done
+
+	script_setup || exit 102
+}
+
+#######################################
+# Parse command line arguments
+#
+# EXITS:
+#   0 - Help requested
+#   3 - Invalid option provided
+#   4 - Unknown option provided
+#######################################
+parse_arguments() {
+	while getopts "hprb:dq" opt; do
+		case "${opt}" in
+		h)
+			usage
+			exit 0
+			;;
+		p)
+			_PASSWORD_MODE=true
+			;;
+		d)
+			_DECRYPT_MODE=true
+			;;
+		b)
+			_BUNDLE_MODE=true
+			_BUNDLE_NAME="${OPTARG}"
+			[[ -z "${_BUNDLE_NAME}" || "${_BUNDLE_NAME}" =~ ^- ]] && {
+				err "Bundle name is required for '-b' option" && usage
+				exit 3
+			}
+			[[ "${_BUNDLE_NAME}" =~ ^[a-zA-Z0-9_-]+$ ]] || {
+				err "Bundle name contains invalid characters" && usage
+				exit 3
+			}
+			;;
+		r)
+			_REMOVE_ORIGINAL=true
+			;;
+		q)
+			_QUIET_MODE=true
+			;;
+		*)
+			err "Unknown option: ${opt}"
+			usage
+			exit 4
+			;;
+		esac
+	done
+
+	readonly _PASSWORD_MODE
+	readonly _DECRYPT_MODE
+	readonly _BUNDLE_MODE
+	readonly _BUNDLE_NAME
+	readonly _REMOVE_ORIGINAL
+	readonly _QUIET_MODE
+
+	if [[ "${_BUNDLE_MODE}" = true && "${_DECRYPT_MODE}" = true ]]; then
+		err "Bundle mode and decrypt mode are incompatible"
+		exit 3
+	fi
+
+	# Remaining arguments are input files
+	shift $((OPTIND - 1))
+	readonly _INPUT_FILES=("${@}")
+}
+
+#######################################
+# Check specified age key is available
+#
+# EXITS:
+#   14 - Required key is not available
+#######################################
+check_age_key() {
+	local key_type="$1"
+
+	local required_key
+	case "${key_type}" in
+	public)
+		required_key="${_PUBLIC_KEY}"
+		;;
+	private)
+		required_key="${_PRIVATE_KEY}"
+		;;
+	*)
+		err "Invalid key type: ${key_type}"
+		exit 1
+		;;
+	esac
+
+	if [[ -z "${required_key}" ]]; then
+		err "Required ${key_type} key is not available"
+		key_setup_help
+		exit 14
+	fi
+}
+
+#######################################
+# Validate that required age keys are available for key-based encryption
+#######################################
+validate_age_keys() {
+	case "${_PASSWORD_MODE}:${_DECRYPT_MODE}" in
+	false:true)
+		check_age_key "private"
+		;;
+	false:false)
+		check_age_key "public"
+		;;
+	esac
+}
+
+#######################################
+# Validate input files exist and are allowed
+#
+# EXITS:
+#   11 - No input files provided
+#   12 - Input file does not exist or is not readable
+#   13 - Input filepath is invalid or not allowed
+#######################################
+get_valid_input_files() {
+	local max_path_length=4096
+
+	local deduped_input_files
+	mapfile -t deduped_input_files < <(remove_duplicates_from_array "${_INPUT_FILES[@]}")
+
+	[[ -n "${deduped_input_files[*]}" ]] || exit 11
+
+	for input_file in "${deduped_input_files[@]}"; do
+		if [[ ! -e "${input_file}" || ! -r "${input_file}" ]]; then
+			err "Input file does not exist or is not readable: ${input_file}"
+			exit 12
+		fi
+
+		if [[ "${input_file}" =~ ^/ ]]; then
+			err "Absolute paths not allowed: ${input_file}"
+			exit 13
+		fi
+
+		if [[ "${input_file}" =~ \.\. ]]; then
+			err "Path traversal not allowed: ${input_file}"
+			exit 13
+		fi
+
+		if [[ "${#input_file}" -gt "${max_path_length}" ]]; then
+			err "File path too long: ${input_file}"
+			exit 13
+		fi
+
+		if [[ "${input_file}" =~ [\<\>\:\"\|\\\?\*] ]]; then
+			err "File path contains invalid characters: ${input_file}"
+			exit 13
+		fi
+	done
+
+	readonly _VALID_INPUT_FILES=("${deduped_input_files[@]}")
+}
+
+#######################################
+# Get encryption status for input file
+#
+# RETURNS:
+#   true if file is encrypted, false if file is not encrypted
+#######################################
+get_encryption_status_for() {
+	local input_file="$1"
+	local encryption_status=false
+
+	if head -c 100 "${input_file}" 2>/dev/null | grep -q "age-encryption.org"; then
+		encryption_status=true
+	fi
+
+	printf "%s\n" "${encryption_status}"
+}
+
+#######################################
+# Validate input files are correct for encryption/decryption
+#
+# EXITS:
+#   15 - Files have incorrect or mismatched encryption statuses
+#   16 - Unexpected file extension
+#######################################
+validate_encryption_mode() {
+	local expected_encryption_status=false
+	[[ "${_DECRYPT_MODE}" = true ]] && expected_encryption_status=true
+
+	local first_file_encryption_status
+	first_file_encryption_status="$(get_encryption_status_for "${_VALID_INPUT_FILES[0]}")"
+	[[ "${first_file_encryption_status}" != "${expected_encryption_status}" ]] && exit 15
+
+	for input_file in "${_VALID_INPUT_FILES[@]}"; do
+		local file_extension="${input_file##*.}"
+
+		local encryption_status
+		encryption_status="$(get_encryption_status_for "${input_file}")"
+		[[ "${encryption_status}" == "${first_file_encryption_status}" ]] || exit 15
+
+		case "${_DECRYPT_MODE}" in
+		true)
+			if [[ "${file_extension}" != "age" ]]; then
+				err "Unexpected file extension for encrypted file: ${input_file}"
+				exit 16
+			fi
+			;;
+		false)
+			if [[ "${file_extension}" = "age" ]]; then
+				err "Unexpected file extension for decrypted file: ${input_file}"
+				exit 16
+			fi
+			;;
+		esac
+	done
+}
+
+#######################################
+# Bundle input files
+#
+# EXITS:
+#   17 - Failed to bundle input files
+#######################################
+bundle_valid_input_files() {
+	local bundle_file="${_BUNDLE_NAME}.tar.gz"
+
+	tar -czf "${bundle_file}" "${_VALID_INPUT_FILES[@]}" || exit 17
+
+	printf "%s\n" "${bundle_file}"
+}
+
+#######################################
+# Get output file for input file
+#
+# EXITS:
+#   18 - Output path is a symlink
+#######################################
+get_output_filename_for() {
+	local input_file="$1"
+
+	local output_file
+	if [[ "${_DECRYPT_MODE}" = true ]]; then
+		output_file="${input_file%.age}"
+	else
+		output_file="${input_file}.age"
+	fi
+
+	if [[ -L "${output_file}" ]]; then
+		err "Output path is a symlink: ${output_file}"
+		exit 18
+	fi
+
+	[[ -e "${output_file}" ]] && prompt_to_overwrite_file "${output_file}"
+
+	printf "%s\n" "${output_file}"
+}
+
+#######################################
+# Prompt to overwrite output file
+#
+# EXITS:
+#   19 - No overwrite permission
+#######################################
+prompt_to_overwrite_file() {
+	local output_file="$1"
+
+	if [[ "${_INTERACTIVE}" = true ]] && [[ "${_QUIET_MODE}" = false ]]; then
+		local overwrite
+		read -r -p "File '${output_file}' already exists. Overwrite? (y/n): " overwrite
+		[[ "${overwrite}" = "y" ]] || exit 19
+	else
+		err "File '${output_file}' already exists"
+		exit 19
+	fi
+}
+
+#######################################
+# Remove original input file
+#######################################
+remove_original_input_file() {
+	local input_file="$1"
+
+	case "${_INTERACTIVE}:${_QUIET_MODE}:${_REMOVE_ORIGINAL}" in
+	*:*:true)
+		rm -- "${input_file}" || err "Failed to remove original file: ${input_file}"
+		;;
+	true:false:false)
+		local response
+		read -r -p "Remove original file '${input_file}'? (y/n): " response
+		if [[ "${response}" = "y" ]]; then
+			rm -- "${input_file}" || err "Failed to remove original file: ${input_file}"
+		fi
+		;;
+	esac
+
+	# Also remove input files for bundle mode
+	local pre_bundled_input=("${_VALID_INPUT_FILES[@]}")
+	case "${_INTERACTIVE}:${_QUIET_MODE}:${_REMOVE_ORIGINAL}:${_BUNDLE_MODE}" in
+	*:*:true:true)
+		for file in "${pre_bundled_input[@]}"; do
+			rm -- "${file}" || err "Failed to remove bundled input file: ${file}"
+		done
+		;;
+	true:false:false:true)
+		local response
+		read -r -p "Also remove pre-bundled input files? (y/n): " response
+		if [[ "${response}" = "y" ]]; then
+			for file in "${pre_bundled_input[@]}"; do
+				rm -- "${file}" || err "Failed to remove bundled input file: ${file}"
+			done
+		fi
+		;;
+	esac
+}
+
+#######################################
+# Process encryption
+#
+# EXITS:
+#   20 - Password-based encryption failed
+#   21 - Key-based encryption failed
+#######################################
+process_encryption() {
+	local input_file="$1"
+	local output_file="$2"
+
+	case "${_PASSWORD_MODE}" in
+	true)
+		age --passphrase --output "${output_file}" "${input_file}" || exit 20
+		remove_original_input_file "${input_file}"
+		;;
+	false)
+		age --output "${output_file}" --recipient "${_PUBLIC_KEY}" "${input_file}" || exit 21
+		remove_original_input_file "${input_file}"
+		;;
+	esac
+}
+
+#######################################
+# Process decryption
+#
+# EXITS:
+#   22 - Password-based decryption failed
+#   23 - Key-based decryption failed
+#######################################
+process_decryption() {
+	local input_file="$1"
+	local output_file="$2"
+
+	case "${_PASSWORD_MODE}" in
+	true)
+		age --decrypt --output "${output_file}" "${input_file}" || exit 22
+		remove_original_input_file "${input_file}"
+		;;
+	false)
+		age --decrypt --identity "${_PRIVATE_KEY}" --output "${output_file}" "${input_file}" || exit 23
+		remove_original_input_file "${input_file}"
+		;;
+	esac
+}
+
+#######################################
+# Process input files
+#######################################
+process_input_files() {
+	local input_files=("${_VALID_INPUT_FILES[@]}")
+	local pre_bundled_input_files=("${input_files[@]}")
+	if [[ "${_BUNDLE_MODE}" = true ]]; then
+		local bundle_file
+		bundle_file="$(bundle_valid_input_files)"
+		input_files=("${bundle_file}")
+		trap 'rm -f "${bundle_file}"' ERR
+	fi
+
+	for input_file in "${input_files[@]}"; do
+		local output_file
+		output_file="$(get_output_filename_for "${input_file}")"
+
+		case "${_DECRYPT_MODE}" in
+		true)
+			process_decryption "${input_file}" "${output_file}"
+			;;
+		false)
+			process_encryption "${input_file}" "${output_file}"
+			;;
+		esac
+
+		# Craft confirmation message
+		local removed
+		removed="$(ansify_string "<removed>" "red")"
+
+		[[ ! -e "${input_file}" ]] && input_file="${input_file} ${removed}"
+
+		local pre_bundled_display="${pre_bundled_input_files[*]}"
+		[[ ! -e "${pre_bundled_input_files[0]}" ]] && pre_bundled_display="${pre_bundled_input_files[*]} ${removed}"
+
+		local confirmation_message
+		if [[ "${_BUNDLE_MODE}" = true ]]; then
+			confirmation_message="${pre_bundled_display} -> ${input_file} -> ${output_file}"
+		else
+			confirmation_message="${input_file} -> ${output_file}"
+		fi
+
+		# Print confirmation message
+		[[ "${_QUIET_MODE}" = false ]] && printf "%s\n" "${confirmation_message}" || true
+	done
+}
+
+#######################################
+# Display usage information
+#######################################
+usage() {
+	local script_name="${_SCRIPT_NAME:-${0##*/}}"
+
+	cat <<USAGE
+
+Description: A wrapper around the age encryption tool that supports both key-based
+and password-based encryption/decryption.
+
+Usage: ${script_name} [OPTIONS] <input_files>
+
+Options:
+    -b <bundle_name>   Bundle input files into a single file before encrypting
+    -h                 Show this help message
+    -d                 Decrypt mode (default is encrypt)
+    -p                 Use password-based encryption (default is key-based)
+    -r                 Remove original file after successful encryption
+    -q                 Quiet mode (no output to terminal)
+
+Examples:
+    ${script_name} file.txt file2.txt
+    ${script_name} -pr file.txt
+    ${script_name} -b my_bundle file.txt file2.txt
+    ${script_name} -d file.txt.age
+USAGE
+}
+
+#######################################
+# Display age key setup instructions
+#######################################
+key_setup_help() {
+	local age_url="https://github.com/FiloSottile/age"
+
+	cat >&2 <<KEY_SETUP_HELP
+To use key-based encryption, set up your age keys:
+
+1. Generate a key pair:
+   age-keygen -o ~/.age/key.txt
+
+   This will create a key pair in ~/.age/key.txt.
+
+2. Encrypt the key pair with a password: (optional)
+   age -e -p -o ~/.age/key.txt.age ~/.age/key.txt
+
+   This will encrypt the key pair with a password and save it to ~/.age/key.txt.age.
+
+3. Set environment variables in your shell configuration:
+   export AGE_SECKEY=~/.age/key.txt(.age)
+   export AGE_PUBKEY=age1xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
+
+For more information, see: ${age_url}
+KEY_SETUP_HELP
+}
+
+#######################################
+# Perform cleanup when script terminates
+#
+# EXITS:
+#   $? - original exit code
+#######################################
+cleanup() {
+	local exit_code=$?
+	print_exit_code "${exit_code}"
+	exit "${exit_code}"
+}
+
+trap 'cleanup' EXIT ERR INT TERM
+
+# =============================================================================
+
+main "$@"
