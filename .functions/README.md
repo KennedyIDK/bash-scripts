@@ -20,7 +20,7 @@
 
 # Setup
 
-Required functions are sourced by a loop in the `setup_and_depencencies` function at the top of the script:
+Required functions are sourced by a loop in the `setup_and_dependencies` function at the top of the script:
 
 ```bash
 setup_and_dependencies() {
@@ -69,7 +69,7 @@ setup_and_dependencies() {
 To make the required functions available to the script you must either:
 
 1. Put all necessary functions in `~/bin/.functions` as I have.
-2. Put all necessary functions somewhere else and update `functions_dir` in the `setup_and_depencencies` to that location.
+2. Put all necessary functions somewhere else and update `functions_dir` in the `setup_and_dependencies` to that location.
 3. Put all necessary functions within the script and remove the sourcing logic from the `setup_and_dependencies` function.
 
 Each script has its own README listing required functions and a one-liner to install them. If you would rather install all the functions you can do so with:

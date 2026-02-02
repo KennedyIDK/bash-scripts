@@ -38,7 +38,7 @@ chmod u+x ~/bin/gammatoggle.sh
 
 ## Configuration
 
-Set the gammastep temerature by editing the `gammastep_temp` variable (default 4500).
+Set the gammastep temperature by editing the `gammastep_temp` variable (default 4500).
 
 ## Troubleshooting
 

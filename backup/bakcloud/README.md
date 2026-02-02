@@ -18,7 +18,7 @@ bakcloud [OPTIONS]
 -h       Show help
 ```
 
-## Depencencies
+## Dependencies
 
 ### External Commands
 

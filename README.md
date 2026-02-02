@@ -55,7 +55,7 @@ A collection of utility scripts for backups, workflow automation, and desktop cu
 |--------|-------------|-------|
 | [mp3oncat](/thunar/mp3oncat/) | Concatenate audio files | Context menu |
 | [swapname](/thunar/swapname/) | Swap two filenames | Context menu |
-| [verify256](/thunar/verify256/) | Verify SHA256 checksum | Context menu |
+| [thunar-verify256](/thunar/verify256/) | Verify SHA256 checksum | Context menu |
 
 ### other/
 
