@@ -1,0 +1,455 @@
+#!/usr/bin/env bash
+
+# SETTINGS
+# =============================================================================
+
+readonly _DEBUG=false # whether to print debug messages
+
+set -o errexit  # abort on nonzero exitstatus
+set -o nounset  # abort on unbound variables
+set -o pipefail # don't hide errors within pipes
+
+# VARIABLES
+# =============================================================================
+
+readonly _TODO_FILE="${HOME}/notes/TODO.md"
+
+readonly _NOTIFICATION_ICON="${HOME}/.icons/obsidian/image.png"
+readonly _NOTIFICATION_EXPIRE_TIME=2000 # milliseconds
+
+readonly _DELIMITER="," # delimiter for separating multiple todo items
+
+_URGENCY=""    # urgency level
+_STATUS="0"    # status
+_TODO_ITEMS="" # todo items, set by parse_arguments()
+
+# FUNCTIONS
+# =============================================================================
+
+main() {
+	setup_and_dependencies
+
+	if [[ ${_INTERACTIVE} == true ]]; then
+		parse_arguments "${@}"
+	else
+		parse_input
+	fi
+
+	append_todo_items_to_table
+	extract_markdown_table_for_sorting
+	sort_markdown_table_by_urgency
+	replace_markdown_table_in_todo_file_with_sorted_table
+}
+
+#######################################
+# Check required functions/dependencies and set global variables
+#
+# EXITS:
+#   101 - Failed to source required function
+#   102 - Failed to run script setup
+#   103 - Failed to create log directory or log file
+#   104 - Failed to check required commands
+#   127 - Missing required dependencies
+#######################################
+setup_and_dependencies() {
+	local core_functions=(
+		"script_setup"
+		"check_required_commands"
+		"print_exit_code"
+		"err"
+		"warn"
+		"deb"
+	)
+
+	local additional_functions=(
+		"trim_lead_trail_whitespace"
+		"remove_duplicates_from_array"
+		"extract_lines_between_markers"
+	)
+
+	local external_commands=(
+	)
+
+	local required_functions=("${core_functions[@]}" "${additional_functions[@]}")
+	readonly _REQUIRED_COMMANDS=("${required_functions[@]}" "${external_commands[@]}")
+
+	local timestamp
+	timestamp="$(date +'%Y%m%d%H%M%S')"
+	local error_message
+	error_message="ERROR/${0##*/} ${timestamp}: Script failed with exit code"
+
+	local functions_dir="${HOME}/bin/.functions"
+	for function in "${required_functions[@]}"; do
+		local function_file="${functions_dir}/${function}"
+		if [[ -s "${function_file}" ]]; then
+			# shellcheck source=/dev/null
+			source "${function_file}" || {
+				printf "%s\n" "${error_message} 101 (Failed to source function ${function})" >&2
+				exit 101
+			}
+		fi
+	done
+
+	script_setup || exit 102
+}
+
+#######################################
+# Validate todo file exists and is writable
+#
+# EXITS:
+#   11 - Todo file does not exist
+#   12 - Todo file is not writeable
+#######################################
+validate_todo_file() {
+	if [[ ! -f "${_TODO_FILE}" ]]; then
+		exit 11
+	fi
+	if [[ ! -w "${_TODO_FILE}" ]]; then
+		exit 12
+	fi
+}
+
+#######################################
+# View todo file
+#######################################
+view_todo_file() {
+	less +/#\ To\ Do\ List "${_TODO_FILE}"
+	# ${EDITOR:-vi} "${todo_file}"
+
+}
+
+#######################################
+# Resolve urgency level
+#######################################
+resolve_urgency_level() {
+	local urgency_level="${_URGENCY}"
+
+	if [[ -z "${urgency_level}" ]]; then
+		read -r -p "Enter the urgency level [a]sap, [w]eek, [m]onth, [s]eason, [h]alf year, [y]ear, [e]ventually: " urgency_level
+	fi
+
+	case "${urgency_level}" in
+	a) urgency_level="asap" ;;
+	w) urgency_level="week" ;;
+	m) urgency_level="month" ;;
+	s) urgency_level="season" ;;
+	h) urgency_level="six months" ;;
+	y) urgency_level="year" ;;
+	e) urgency_level="eventually" ;;
+	*) urgency_level="${urgency_level:-Unknown}" ;;
+	esac
+
+	printf "%s\n" "${urgency_level}"
+}
+
+#######################################
+# Sort items by delimiter and remove duplicates
+#
+# Arguments:
+#   $1 - Input string to sort
+#
+# EXITS:
+#   14 - No valid items after sorting
+#######################################
+sort_items() {
+	local input="${1}"
+
+	if [[ "${input}" == *"${_DELIMITER}"* ]]; then
+		local items=()
+		local unique_items=()
+
+		# Split by delimiter
+		while [[ "${input}" == *"${_DELIMITER}"* ]]; do
+			local item="${input%%"${_DELIMITER}"*}"
+			items+=("${item}")
+			input="${input#*"${_DELIMITER}"}"
+		done
+		# Add the last item
+		if [[ -n "${input}" ]]; then
+			items+=("${input}")
+		fi
+
+		# Trim whitespace from all items
+		local trimmed_items=()
+		for item in "${items[@]}"; do
+			local trimmed_item
+			trimmed_item="$(trim_lead_trail_whitespace "${item}")"
+			if [[ -n "${trimmed_item}" ]]; then
+				trimmed_items+=("${trimmed_item}")
+			fi
+		done
+
+		# Remove duplicates
+		if [[ ${#trimmed_items[@]} -gt 0 ]]; then
+			readarray -t unique_items < <(remove_duplicates_from_array "${trimmed_items[@]}")
+			if [[ ${#unique_items[@]} -gt 0 ]]; then
+				printf "%s\n" "${unique_items[@]}"
+			else
+				exit 14
+			fi
+		else
+			exit 14
+		fi
+
+	else
+		printf "%s\n" "${input}"
+	fi
+}
+
+#######################################
+# Parse command line arguments
+#
+# EXITS:
+#   0 - Help requested
+#   0 - Script opened in editor
+#   0 - Todo file viewed
+#   3 - Invalid option provided
+#   4 - Unknown option provided
+#   13 - No todo items provided
+#   14 - Failed to open todo file in editor
+#######################################
+parse_arguments() {
+	while getopts "hveu:s:" opt; do
+		case "${opt}" in
+		h)
+			usage
+			exit 0
+			;;
+		v)
+			validate_todo_file
+			view_todo_file
+			exit 0
+			;;
+		e)
+			validate_todo_file
+			${EDITOR:-vi} "${_TODO_FILE}" || exit 14
+			exit 0
+			;;
+		u)
+			_URGENCY="${OPTARG}"
+			;;
+		s)
+			_STATUS="${OPTARG}"
+			if [[ ! "${_STATUS}" =~ ^[0-9]$ ]]; then
+				err "Status must be a number between 0-9"
+				exit 3
+			fi
+			;;
+		*)
+			err "Unknown option: ${opt}"
+			usage
+			exit 4
+			;;
+		esac
+	done
+	shift $((OPTIND - 1))
+
+	_URGENCY="$(resolve_urgency_level)"
+
+	if [[ $# -gt 0 ]]; then
+		mapfile -t _TODO_ITEMS < <(sort_items "${*}")
+	else
+		exit 13
+	fi
+}
+
+#######################################
+# Parse input from rofi or zenity
+#######################################
+parse_input() {
+	local text_prompt="Add todo"
+
+	local input
+	if command -v rofi &>/dev/null; then
+		input=$(rofi -dmenu -p "$text_prompt") || exit 1
+	elif command -v zenity &>/dev/null; then
+		input=$(zenity --entry --title="Obsidian" --text="$text_prompt") || exit 1
+	else
+		exit 14
+	fi
+
+	local flag_value
+	local urgency=""
+	local status="0"
+
+	# Check for urgency flag
+	if [[ "$input" == *"-u"* ]]; then
+		# Extract the flag value
+		flag_value=$(echo "$input" | sed -n 's/.*-u \([a-z]\).*/\1/p')
+		case "$flag_value" in
+		a) urgency="asap" ;;
+		w) urgency="week" ;;
+		m) urgency="month" ;;
+		s) urgency="season" ;;
+		h) urgency="six months" ;;
+		y) urgency="year" ;;
+		e) urgency="eventually" ;;
+		*) urgency="${flag_value:-Unknown}" ;;
+		esac
+		# Remove the flag and its value
+		input="${input//-u [a-z]/}"
+	fi
+
+	_URGENCY="${urgency}"
+
+	# Check for status flag
+	if [[ "$input" == *"-s"* ]]; then
+		# Extract the flag value
+		status=$(echo "$input" | sed -n 's/.*-s \([0-9]\).*/\1/p')
+		# Remove the flag and its value
+		input="${input//-s [0-9]/}"
+	fi
+
+	_STATUS="${status}"
+
+	mapfile -t _TODO_ITEMS < <(sort_items "${input}")
+}
+
+#######################################
+# Identify the first line of the markdown table
+#######################################
+identify_table_first_line() {
+	local table_divider_line
+	table_divider_line="$(grep -n -E '^\| -+' "${_TODO_FILE}" | head -n 1 | cut -d: -f1)"
+	local table_first_line
+	table_first_line=$((table_divider_line + 1))
+
+	printf "%s\n" "${table_first_line}"
+}
+
+#######################################
+# Append todo item to table at first line
+#######################################
+append_todo_items_to_table() {
+	local todo_items=("${_TODO_ITEMS[@]}")
+
+	local timestamp
+	timestamp="$(date +'%Y-%m-%d')"
+
+	local table_first_line
+	table_first_line=$(identify_table_first_line)
+
+	for todo_item in "${todo_items[@]}"; do
+		#Padding
+		local padded_todo_item
+		padded_todo_item="$(printf "%-13s" "${todo_item}")"
+		local padded_urgency
+		padded_urgency="$(printf "%-7s" "${_URGENCY}")"
+		local padded_status
+		padded_status="$(printf "%-6s" "${_STATUS}")"
+
+		local table_entry
+		table_entry="| ${timestamp} | ${padded_todo_item} | ${padded_urgency} | ${padded_status} |       |"
+
+		if [[ -n "${todo_item}" ]]; then
+			sed -i "${table_first_line}i${table_entry}" "${_TODO_FILE}" &&
+				notify-send --icon="${_NOTIFICATION_ICON}" --expire-time="${_NOTIFICATION_EXPIRE_TIME}" "Updated to do list!"
+			table_first_line=$((table_first_line + 1))
+		fi
+	done
+}
+
+#######################################
+# Extract markdown table from todo file for sorting
+#######################################
+extract_markdown_table_for_sorting() {
+	local table_first_line="# To Do List"
+	local table_last_line
+	table_last_line="End of Todo Table"
+
+	temp_file="${HOME}/tmp/todo_table_for_sorting.md"
+
+	extract_lines_between_markers "${_TODO_FILE}" "${table_first_line}" "${table_last_line}" >"${temp_file}"
+}
+
+#######################################
+# Sort markdown table by urgency
+#######################################
+sort_markdown_table_by_urgency() {
+	local temp_file="${HOME}/tmp/todo_table_for_sorting.md"
+	local sorted_file="${HOME}/tmp/todo_table_sorted.md"
+	local urgency_levels=("asap" "week" "month" "season" "six months" "year" "eventually")
+
+	: >"${sorted_file}"
+
+	for urgency in "${urgency_levels[@]}"; do
+		local urgency_lines
+		urgency_lines="$(grep -E "\| *${urgency} *\|" "${temp_file}" || true)"
+		if [[ -n "${urgency_lines}" ]]; then
+			echo "${urgency_lines}" >>"${sorted_file}"
+		fi
+	done
+}
+
+#######################################
+# Replace markdown table in todo file with sorted table
+#######################################
+replace_markdown_table_in_todo_file_with_sorted_table() {
+	local sorted_file="${HOME}/tmp/todo_table_sorted.md"
+
+	local table_first_line
+	table_first_line=$(identify_table_first_line)
+
+	local table_last_line
+	table_last_line="$(grep -n "End of Todo Table" "${_TODO_FILE}" | head -n 1 | cut -d: -f1)"
+	local table_content_last_line=$((table_last_line - 1))
+
+	sed -i "${table_first_line},${table_content_last_line}d" "${_TODO_FILE}"
+	local insert_after_line=$((table_first_line - 1))
+	sed -i "${insert_after_line}r ${sorted_file}" "${_TODO_FILE}"
+}
+
+#######################################
+# Display usage information
+#######################################
+usage() {
+	local script_name="${_SCRIPT_NAME:-$(basename "$0")}"
+
+	cat <<USAGE
+Usage: ${script_name} [OPTIONS] todo item(s)
+
+Options:
+    -u <urgency>     Set urgency level
+    -s <status>      Set status
+    -h               Show this help message
+    -v               View todo file
+    -e               Open todo file in editor
+
+
+Urgency shortcodes:
+    a = asap
+    w = week
+    m = month
+    s = season
+    h = six months
+    y = year
+    e = eventually
+
+Examples:
+    ${script_name} Buy groceries
+    ${script_name} -u w -s 3 Fix broken window
+    ${script_name} -u a Urgent task 1, Urgent task 2
+USAGE
+}
+
+#######################################
+# Perform cleanup when script terminates
+#
+# EXITS:
+#   $? - original exit code
+#######################################
+cleanup() {
+	local exit_code=$?
+
+	rm -f "${HOME}/tmp/todo_table_for_sorting.md"
+	rm -f "${HOME}/tmp/todo_table_sorted.md"
+
+	print_exit_code "${exit_code}"
+	exit "${exit_code}"
+}
+
+trap 'cleanup' EXIT ERR INT TERM
+
+# =============================================================================
+
+main "$@"
