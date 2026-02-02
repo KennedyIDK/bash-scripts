@@ -1,0 +1,241 @@
+#!/usr/bin/env bash
+
+# link-shorten
+#
+# A script to shorten links using a URL shortener and copy to clipboard
+# Can be run from the terminal or non-interactively using a system hotkey
+#
+# Usage:
+#   link-shorten <url>
+
+# SETTINGS
+# =============================================================================
+
+readonly _DEBUG=false
+
+set -o errexit
+set -o nounset
+set -o pipefail
+
+# VARIABLES
+# =============================================================================
+
+readonly _SESSION_TYPE="${XDG_SESSION_TYPE:-unknown}" # X11 or Wayland session type
+# _URL - URL to shorten (set readonly in parse_arguments)
+# _SHORT_URL - shortened URL (set readonly in get_short_url)
+
+# FUNCTIONS
+# =============================================================================
+
+main() {
+	setup_and_dependencies
+	parse_arguments "$@"
+	get_short_url
+	copy_short_url
+}
+
+#######################################
+# Check required functions/dependencies and set global variables
+#
+# EXITS:
+#   101 - Failed to source functions file
+#   102 - Failed to run script setup
+#   103 - Failed to create log directory or log file
+#   104 - Failed to check required commands
+#   127 - Missing required commands
+#   18 - Unsupported session type
+#######################################
+setup_and_dependencies() {
+	local core_functions=(
+		"script_setup"
+		"check_required_commands"
+		"print_exit_code"
+		"err"
+		"warn"
+		"deb"
+	)
+
+	local additional_functions=(
+	)
+
+	local external_commands=(
+		"curl"
+		"notify-send"
+	)
+
+	local timestamp
+	timestamp="$(date +'%Y%m%d%H%M%S')"
+	local error_message
+	error_message="ERROR/${0##*/} ${timestamp}: Script failed with exit code"
+
+	case "${_SESSION_TYPE}" in
+	"wayland") external_commands+=("wl-copy") ;;
+	"x11") external_commands+=("xclip") ;;
+	*)
+		printf "%s\n" "${error_message} 18 (Unsupported session type '${_SESSION_TYPE}'. Supported types: x11, wayland)" >&2
+		exit 18
+		;;
+	esac
+
+	local required_functions=("${core_functions[@]}" "${additional_functions[@]}")
+	readonly _REQUIRED_COMMANDS=("${required_functions[@]}" "${external_commands[@]}")
+
+	local functions_dir="${HOME}/bin/.functions"
+	for function in "${required_functions[@]}"; do
+		local function_file="${functions_dir}/${function}"
+		if [[ -s "${function_file}" ]]; then
+			# shellcheck source=/dev/null
+			source "${function_file}" || {
+				printf "%s\n" "${error_message} 101 (Failed to source function ${function})" >&2
+				exit 101
+			}
+		fi
+	done
+
+	script_setup || exit 102
+}
+
+#######################################
+# Parse command line arguments
+#
+# EXITS:
+#   0 - Help requested
+#   4 - Unknown option provided
+#  11 - No URL provided
+#  12 - Failed to get URL from clipboard
+#  13 - Too many arguments
+#  14 - Invalid URL
+#######################################
+parse_arguments() {
+	while getopts "h" opt; do
+		case "${opt}" in
+		h)
+			usage
+			exit 0
+			;;
+		*)
+			err "Unknown option: ${opt}"
+			usage
+			exit 4
+			;;
+		esac
+	done
+	shift $((OPTIND - 1))
+
+	# Set _URL
+	if [[ "${_INTERACTIVE}" = true ]]; then
+		[[ $# -ne 1 ]] && usage && exit 13
+		_URL="${1:-}"
+		[[ -z "${_URL}" ]] && usage && exit 11
+	else
+		case "${_SESSION_TYPE}" in
+		"x11")
+			if ! _URL="$(xclip -selection clipboard -o 2>&1)"; then
+				err "Failed to read from X11 clipboard"
+				exit 12
+			fi
+			;;
+		"wayland")
+			if ! _URL="$(wl-paste --no-newline 2>&1)"; then
+				err "Failed to read from Wayland clipboard"
+				exit 12
+			fi
+			;;
+		esac
+
+		if [[ -z "${_URL}" ]]; then
+			err "Clipboard is empty"
+			exit 12
+		fi
+	fi
+
+	readonly _URL
+
+	if ! [[ "${_URL}" =~ ^https?:// ]]; then
+		err "Invalid URL format (must start with http:// or https://): ${_URL}"
+		exit 14
+	fi
+
+	# Verify URL is reachable
+	if ! curl -s -I --max-time 5 "${_URL}" &>/dev/null; then
+		err "URL is not reachable: ${_URL}"
+		exit 14
+	fi
+}
+
+#######################################
+# Get shortened URL
+#
+# EXITS:
+#   15 - Failed to shorten URL
+#######################################
+get_short_url() {
+	local short_url
+	short_url=$(curl -s --max-time 10 -F "url=${_URL}" https://shorta.link 2>/dev/null)
+
+	[[ -n "${short_url}" ]] || exit 15
+
+	# Validate URL is not an error message
+	[[ "${short_url}" =~ ^https?:// ]] || exit 15
+
+	if [[ "${_INTERACTIVE}" = true ]]; then
+		echo "Shortened URL: ${short_url}"
+	fi
+
+	readonly _SHORT_URL="${short_url}"
+}
+
+#######################################
+# Copy shortened URL to clipboard
+#
+# EXITS:
+#   16 - Failed to copy URL using wl-copy
+#   17 - Failed to copy URL using xclip
+#######################################
+copy_short_url() {
+	case "${_SESSION_TYPE}" in
+	"wayland")
+		wl-copy "${_SHORT_URL}" || exit 16
+		;;
+	"x11")
+		echo -n "${_SHORT_URL}" | xclip -selection clipboard || exit 17
+		;;
+	esac
+
+	if [[ "${_INTERACTIVE}" = false ]]; then
+		notify-send "Shortened URL copied to clipboard" "${_SHORT_URL}"
+	fi
+}
+
+#######################################
+# Display usage information
+#######################################
+usage() {
+	cat <<USAGE
+Usage: ${_SCRIPT_NAME} <url>
+
+Options:
+    -h     Show this help message
+
+Examples:
+    ${_SCRIPT_NAME} https://www.iainkennedy.com
+USAGE
+}
+
+#######################################
+# Perform cleanup when script terminates
+#
+# EXITS:
+#   $? - original exit code
+#######################################
+cleanup() {
+	local exit_code=$?
+	print_exit_code "${exit_code}"
+	exit "${exit_code}"
+}
+
+trap 'cleanup' EXIT ERR INT TERM
+
+# =============================================================================
+
+main "$@"
