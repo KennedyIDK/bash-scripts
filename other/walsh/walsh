@@ -1,0 +1,360 @@
+#!/usr/bin/env bash
+
+# walsh
+#
+# A script for categorising images used as desktop wallpapers
+#
+# Usage:
+#   walsh <image/dir>
+#
+# Options:
+#   -h     Show this help message
+#
+
+# SETTINGS
+# =============================================================================
+
+readonly _DEBUG=false
+
+set -o errexit
+set -o nounset
+set -o pipefail
+
+# VARIABLES
+# =============================================================================
+
+readonly _WALLPAPER_DIR="${HOME}/.backgrounds" # destination directory for wallpapers
+
+_INPUT_FILES=()       # array of input files
+_VALID_INPUT_FILES=() # array of valid input files, set by determine_valid_input_files()
+
+# FUNCTIONS
+# =============================================================================
+
+main() {
+	setup_and_dependencies
+	parse_arguments "${@}"
+	validate_backgrounds_directory
+	determine_valid_input_files
+	process_images
+}
+
+#######################################
+# Check required functions/dependencies and set global variables
+#
+# EXITS:
+#   101 - Failed to source required function
+#   102 - Failed to run script setup
+#   103 - Failed to create log directory or log file
+#   104 - Failed to check required commands
+#   127 - Missing required dependencies
+#######################################
+setup_and_dependencies() {
+	local core_functions=(
+		"script_setup"
+		"check_required_commands"
+		"print_exit_code"
+		"err"
+		"warn"
+		"deb"
+	)
+
+	local additional_functions=(
+		"remove_duplicates_from_array"
+	)
+
+	local external_commands=(
+		"exiftool"
+		"detox"
+		"bc"
+	)
+
+	local required_functions=("${core_functions[@]}" "${additional_functions[@]}")
+	readonly _REQUIRED_COMMANDS=("${required_functions[@]}" "${external_commands[@]}")
+
+	local timestamp
+	timestamp="$(date +'%Y%m%d%H%M%S')"
+	local error_message
+	error_message="ERROR/${0##*/} ${timestamp}: Script failed with exit code"
+
+	local functions_dir="${HOME}/bin/.functions"
+	for function in "${required_functions[@]}"; do
+		local function_file="${functions_dir}/${function}"
+		if [[ -s "${function_file}" ]]; then
+			# shellcheck source=/dev/null
+			source "${function_file}" || {
+				printf "%s\n" "${error_message} 101 (Failed to source function ${function})" >&2
+				exit 101
+			}
+		fi
+	done
+
+	script_setup || exit 102
+}
+
+#######################################
+# Parse command line arguments
+#
+# EXITS:
+#   0 - Help requested
+#   4 - Unknown option provided
+#######################################
+parse_arguments() {
+
+	while getopts "h" opt; do
+		case "${opt}" in
+		h)
+			usage
+			exit 0
+			;;
+		*)
+			err "Unknown option: ${opt}"
+			usage
+			exit 4
+			;;
+		esac
+	done
+
+	# Remaining arguments are input files
+	shift $((OPTIND - 1))
+	_INPUT_FILES=("${@}")
+}
+
+#######################################
+# Get MIME type of input file (to validate image)
+#######################################
+get_mime_type_for() {
+	local input_file="$1"
+	local mime_type
+	mime_type="$(file --mime-type -b "${input_file}")"
+	printf "%s\n" "${mime_type}"
+}
+
+#######################################
+# Prompt user to continue with all files in directory
+#
+# EXITS:
+#   11 - No input files provided
+#######################################
+prompt_user_to_continue_with_all_files_in_directory() {
+	local directory="$1"
+
+	[[ "${_INTERACTIVE}" = true ]] || exit 11
+
+	local continue_with_all_files
+	read -r -p "No input files provided. Would you like to process all images/videos in ${directory}? (y/*): " continue_with_all_files
+	if [[ "${continue_with_all_files}" = "y" ]]; then
+		shopt -s nullglob
+		_INPUT_FILES=("${directory}"/*)
+		shopt -u nullglob
+	fi
+
+	if [[ "${#_INPUT_FILES[@]}" -eq 0 ]]; then
+		exit 11
+	fi
+}
+
+#######################################
+# Determine input files
+#
+# EXITS:
+#   11 - No input files provided
+#   12 - No valid input files found
+#   13 - Input file does not exist
+#   14 - Input file is not readable
+#######################################
+determine_valid_input_files() {
+
+	case "${#_INPUT_FILES[@]}" in
+	0)
+		prompt_user_to_continue_with_all_files_in_directory "${PWD}"
+		;;
+	*)
+		if [[ -d "${_INPUT_FILES[0]}" ]]; then
+
+			if [[ "${_INTERACTIVE}" = true ]]; then
+				prompt_user_to_continue_with_all_files_in_directory "${_INPUT_FILES[0]}"
+			else
+				shopt -s nullglob
+				_INPUT_FILES=("${_INPUT_FILES[0]}"/*)
+				shopt -u nullglob
+			fi
+
+		else
+			_INPUT_FILES=("${_INPUT_FILES[@]}")
+		fi
+		;;
+	esac
+
+	if [[ "${#_INPUT_FILES[@]}" -eq 0 ]]; then
+		exit 11
+	fi
+
+	for input_file in "${_INPUT_FILES[@]}"; do
+		if [[ ! -f "${input_file}" ]]; then
+			err "Input file does not exist: ${input_file}"
+			exit 13
+		fi
+
+		if [[ ! -r "${input_file}" ]]; then
+			err "Input file is not readable: ${input_file}"
+			exit 14
+		fi
+
+		local mime_type
+		mime_type="$(get_mime_type_for "${input_file}")"
+		if [[ "${mime_type}" =~ ^(image)/ ]]; then
+			_VALID_INPUT_FILES+=("${input_file}")
+		fi
+	done
+
+	mapfile -t _VALID_INPUT_FILES < <(remove_duplicates_from_array "${_VALID_INPUT_FILES[@]}")
+	readonly _VALID_INPUT_FILES
+
+	if [[ "${#_VALID_INPUT_FILES[@]}" -eq 0 ]]; then
+		exit 12
+	fi
+
+	echo "Number of valid input files: ${#_VALID_INPUT_FILES[@]}"
+}
+
+#######################################
+# Get image dimensions (width and height)
+#
+# EXITS:
+#   17 - Failed to get dimensions of image
+#######################################
+get_image_dimensions() {
+	local image_file="$1"
+
+	local width height
+	width="$(exiftool -m -ImageWidth -b "${image_file}" 2>/dev/null)"
+	height="$(exiftool -m -ImageHeight -b "${image_file}" 2>/dev/null)"
+
+	if [[ -z "${width}" || -z "${height}" ]]; then
+		err "Failed to get dimensions of image: ${image_file}"
+		exit 17
+	fi
+
+	printf "%s %s\n" "${width}" "${height}"
+}
+
+#######################################
+# Validate wallpapers directory
+#
+# EXITS:
+#   19 - Failed to create wallpapers directory
+#######################################
+validate_backgrounds_directory() {
+	if ! [[ -d "${_WALLPAPER_DIR}" ]]; then
+		mkdir -p "${_WALLPAPER_DIR}" || exit 19
+	fi
+}
+
+#######################################
+# Determine output file
+#
+# EXITS:
+#   18 - Failed to calculate aspect ratio of image
+#######################################
+determine_output_file_for() {
+	local image_file="$1"
+	local image_filename
+	image_filename="$(basename "${image_file}")"
+
+	local width height
+	read -r width height <<<"$(get_image_dimensions "${image_file}")"
+
+	local resolution="${width}x${height}"
+
+	local aspect_ratio
+	aspect_ratio="$(bc -l <<<"${width}/${height}" | awk '{printf "%.2f", $0}')"
+
+	if [[ -z "${aspect_ratio}" ]] || [[ ! "${aspect_ratio}" =~ ^[0-9]+\.[0-9]+$ ]]; then
+		err "Failed to calculate aspect ratio for: ${image_file} (width=${width}, height=${height})"
+		exit 18
+	fi
+
+	local output_file
+	if ! [[ "${PWD}" == "${_WALLPAPER_DIR}" ]] && ! [[ "${PWD}" =~ ^"${_WALLPAPER_DIR}"/ ]]; then
+		output_file="${_WALLPAPER_DIR}/${aspect_ratio}-${resolution}-${image_filename}"
+	else
+		output_file="${aspect_ratio}-${resolution}-${image_filename}"
+	fi
+
+	printf "%s\n" "${output_file}"
+}
+
+#######################################
+# Process input images
+#
+# EXITS:
+#   20 - Failed to rename image to output file
+#######################################
+process_images() {
+	local input_files=("${_VALID_INPUT_FILES[@]}")
+	local i=0
+
+	for image_file in "${input_files[@]}"; do
+		i=$((i + 1))
+		local output_file
+		output_file="$(determine_output_file_for "${image_file}")"
+
+		if [[ "${#input_files[@]}" -gt 1 ]]; then
+			echo -e "\r [${i}/${#_VALID_INPUT_FILES[@]}] Processing ${image_file}..."
+		else
+			echo "Processing ${image_file}..."
+		fi
+
+		if [[ -e "${output_file}" ]]; then
+			err "Output file already exists: ${output_file}, skipping"
+			continue
+		fi
+
+		if ! mv "${image_file}" "${output_file}"; then
+			err "Failed to rename ${image_file} to ${output_file}"
+			exit 20
+		fi
+
+		detox -s lower "${output_file}" || err "Failed to detox ${output_file}"
+	done
+
+	if [[ "${#input_files[@]}" -gt 1 ]]; then
+		echo -e "\rAll images processed"
+	else
+		echo -e "Image processed"
+	fi
+}
+
+#######################################
+# Display usage information
+#######################################
+usage() {
+	cat <<USAGE
+Usage: ${_SCRIPT_NAME} <image/dir>
+
+Options:
+    -h     Show this help message
+
+Examples:
+    ${_SCRIPT_NAME}
+USAGE
+}
+
+#######################################
+# Perform cleanup when script terminates
+#
+# EXITS:
+#   $? - original exit code
+#######################################
+cleanup() {
+	local exit_code=$?
+	print_exit_code "${exit_code}"
+	exit "${exit_code}"
+}
+
+trap 'cleanup' EXIT ERR INT TERM
+
+# =============================================================================
+
+main "$@"
