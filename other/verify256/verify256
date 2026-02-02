@@ -1,0 +1,270 @@
+#!/usr/bin/env bash
+#
+# verify256
+#
+# Compare the actual and expected SHA256 sum of a file.
+# The expected sum can be provided directly or in a .txt file.
+#
+# Usage: verify256 <filename> <expected_sha256_sum|sum_file.txt>
+# Options:
+#   -q, --quiet    Suppress verbose output
+#   -h, --help     Show this help message
+
+# SETTINGS
+# =============================================================================
+
+readonly _DEBUG=false
+
+set -o errexit
+set -o nounset
+set -o pipefail
+
+# VARIABLES
+# =============================================================================
+
+_QUIET=false
+_SUM_IS_FILE=false
+
+_INPUT_FILE=""
+_EXPECTED_SUM=""
+_ACTUAL_SUM=""
+
+# FUNCTIONS
+# ==============================================================================
+
+main() {
+	setup_and_dependencies
+	parse_arguments "$@"
+	validate_inputs
+	display_file_info
+	check_sha256
+}
+
+# Functions
+# ==============================================================================
+
+#######################################
+# Check required functions/dependencies and set global variables
+#
+# EXITS:
+#   101 - Failed to source required function
+#   102 - Failed to run script setup
+#   103 - Failed to create log directory or log file
+#   104 - Failed to check required commands
+#   127 - Missing required dependencies
+#######################################
+setup_and_dependencies() {
+	local core_functions=(
+		"script_setup"
+		"check_required_commands"
+		"print_exit_code"
+		"err"
+		"warn"
+		"deb"
+	)
+
+	local additional_functions=()
+
+	local external_commands=()
+
+	local required_functions=("${core_functions[@]}" "${additional_functions[@]}")
+	readonly _REQUIRED_COMMANDS=("${required_functions[@]}" "${external_commands[@]}")
+
+	local timestamp
+	timestamp="$(date +'%Y%m%d%H%M%S')"
+	local error_message
+	error_message="ERROR/${0##*/} ${timestamp}: Script failed with exit code"
+
+	local functions_dir="${HOME}/bin/.functions"
+	for function in "${required_functions[@]}"; do
+		local function_file="${functions_dir}/${function}"
+		if [[ -s "${function_file}" ]]; then
+			# shellcheck source=/dev/null
+			source "${function_file}" || {
+				printf "%s\n" "${error_message} 101 (Failed to source function ${function})" >&2
+				exit 101
+			}
+		fi
+	done
+
+	script_setup || exit 102
+}
+
+#######################################
+# Parse command line arguments
+#
+# Exits:
+#   0 - Help requested
+#   4 - Unknown option provided
+#######################################
+parse_arguments() {
+	local -a positional_args=()
+
+	while [[ $# -gt 0 ]]; do
+		case $1 in
+		-h | --help)
+			usage
+			exit 0
+			;;
+		-q | --quiet)
+			_QUIET=true
+			shift
+			;;
+		--)
+			shift
+			positional_args+=("$@")
+			break
+			;;
+		-*)
+			err "Unknown option: ${1}"
+			usage
+			exit 4
+			;;
+		*)
+			positional_args+=("$1")
+			shift
+			;;
+		esac
+	done
+
+	if [[ ${#positional_args[@]} -ge 1 ]]; then
+		_INPUT_FILE="${positional_args[0]}"
+	fi
+	if [[ ${#positional_args[@]} -ge 2 ]]; then
+		_EXPECTED_SUM="${positional_args[1]}"
+	fi
+}
+
+#######################################
+# Validate input
+#
+# Exits:
+#   11 - Invalid number of arguments provided
+#   12 - Input file not found
+#   13 - Sum file not found
+#   14 - Expected sum not provided
+#######################################
+validate_inputs() {
+	if [[ -z "${_INPUT_FILE}" ]] || [[ -z "${_EXPECTED_SUM}" ]]; then
+		err "Usage: ${0##*/} <filename> <expected_sha256_sum|sum_file.txt>"
+		exit 11
+	fi
+
+	if [[ ! -f "${_INPUT_FILE}" ]]; then
+		err "File '${_INPUT_FILE}' not found."
+		exit 12
+	fi
+
+	if [[ "${_EXPECTED_SUM}" == *.txt ]]; then
+		if [[ ! -f "${_EXPECTED_SUM}" ]]; then
+			err "Sum file '${_EXPECTED_SUM}' not found."
+			exit 13
+		else
+			_SUM_IS_FILE=true
+			_EXPECTED_SUM="$(head -n1 "${_EXPECTED_SUM}" | awk '{print $1}')"
+			if [[ -z "${_EXPECTED_SUM}" ]]; then
+				err "Sum file is empty or malformed."
+				exit 14
+			fi
+		fi
+	fi
+
+	if [[ ! "${_EXPECTED_SUM}" =~ ^[a-fA-F0-9]{64}$ ]]; then
+		err "Expected sum does not appear to be a valid SHA256 hash"
+		exit 14
+	fi
+
+	readonly _INPUT_FILE
+	readonly _EXPECTED_SUM
+	readonly _SUM_IS_FILE
+}
+
+#######################################
+# Display file information
+#######################################
+display_file_info() {
+	[[ "${_QUIET}" == "true" ]] && return
+
+	printf "\nFile: %s\n" "${_INPUT_FILE}"
+	if [[ "${_SUM_IS_FILE}" == "true" ]]; then
+		printf "Expected sum (from file): %s\n" "${_EXPECTED_SUM}"
+	else
+		printf "Expected sum: %s\n" "${_EXPECTED_SUM}"
+	fi
+	printf "\n"
+}
+
+#######################################
+# Get the actual SHA256 sum of the input file
+#
+# EXITS:
+#   15 - Failed to get SHA256 sum of file
+#######################################
+get_actual_sum() {
+	_ACTUAL_SUM="$(sha256sum "${_INPUT_FILE}" | awk '{print $1}')"
+	readonly _ACTUAL_SUM
+	if [[ -z "${_ACTUAL_SUM}" ]]; then
+		err "Failed to get SHA256 sum of file: ${_INPUT_FILE}"
+		exit 15
+	fi
+}
+
+#######################################
+# Check if the actual SHA256 sum matches the expected SHA256 sum
+#
+# EXITS:
+#   16 - SHA256 verification failed (sums do not match)
+#######################################
+check_sha256() {
+	get_actual_sum
+
+	if [[ "${_ACTUAL_SUM}" == "${_EXPECTED_SUM}" ]]; then
+		if [[ "${_QUIET}" == "false" ]]; then
+			printf "Verification successful: SHA256 sums MATCH.\n"
+		fi
+	else
+		if [[ "${_QUIET}" == "false" ]]; then
+			printf "Verification failed: SHA256 sums DO NOT MATCH.\n"
+			printf "\nExpected: %s\n" "${_EXPECTED_SUM}"
+			printf "Got:      %s\n" "${_ACTUAL_SUM}"
+		fi
+		exit 16
+	fi
+}
+
+#######################################
+# Display usage information
+#######################################
+usage() {
+	cat <<USAGE
+Usage: ${0##*/} <filename> <expected_sha256_sum|sum_file.txt>
+
+Compare the actual and expected SHA256 sum of a file.
+
+Options:
+  -q, --quiet    Suppress verbose output
+  -h, --help     Show this help message
+
+Examples:
+  ${0##*/} file.txt 1234abcd...
+  ${0##*/} file.txt expected_sum.txt
+USAGE
+}
+
+#######################################
+# Perform cleanup when script terminates
+#
+# EXITS:
+#   $? - original exit code
+#######################################
+cleanup() {
+	local exit_code=$?
+	print_exit_code "${exit_code}"
+	exit "${exit_code}"
+}
+
+trap 'cleanup' EXIT ERR INT TERM
+
+# =============================================================================
+
+main "$@"
