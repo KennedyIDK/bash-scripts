@@ -24,12 +24,23 @@ Required functions are sourced by a loop in the `setup_and_depencencies` functio
 
 ```bash
 setup_and_dependencies() {
-	local core_functions=("script_setup" "check_required_commands"
-		"print_exit_code" "err" "warn" "deb")
+	local core_functions=(
+		"script_setup"
+		"check_required_commands"
+		"print_exit_code"
+		"err"
+		"warn"
+		"deb"
+	)
 
-	local additional_functions=("remove_duplicates_from_array")
+	local additional_functions=(
+		"remove_duplicates_from_array"
+		"ansify_string"
+	)
 
-	local external_commands=("age")
+	local external_commands=(
+		"age"
+	)
 
 	local required_functions=("${core_functions[@]}" "${additional_functions[@]}")
 	readonly _REQUIRED_COMMANDS=("${required_functions[@]}" "${external_commands[@]}")
